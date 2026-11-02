@@ -21,7 +21,7 @@ export function validateUserPath(raw, kind = 'folder') {
   if (s.length > MAX_LEN) throw new ApiError(400, 'INVALID_PATH', '路径过长（上限 240 字符）');
   // 设备前缀 / 长路径前缀：绕过 Win32 校验的入口
   if (/^\\\\[.?]\\/.test(s)) throw new ApiError(400, 'INVALID_PATH', '不允许设备或长路径前缀');
-  if (!path.isAbsolute(s)) throw new ApiError(400, 'INVALID_PATH', '请填写绝对路径，例如 E:\\SFH office');
+  if (!path.isAbsolute(s)) throw new ApiError(400, 'INVALID_PATH', '请填写绝对路径，例如 E:\\我的文档\\合同');
   if (s.includes('..')) {
     const normalized = path.normalize(s);
     if (normalized.split(/[\\/]/).includes('..')) {

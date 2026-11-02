@@ -98,7 +98,7 @@ function fillNewTask() {
   const est = document.getElementById('tmEst');
   est.value = '45';
   const f = document.getElementById('tmFolder');
-  f.value = 'E:\\SFH office';
+  f.value = 'E:\\工作资料';
 }
 
 const SCENARIOS = {

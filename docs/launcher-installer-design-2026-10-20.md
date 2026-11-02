@@ -403,7 +403,7 @@ internal static class Browser
 launcher    E:\...\待办工作台.exe
 appDir      E:\...\.app\app-1.0.0.0
 dataDir     E:\...\工作台数据
-logPath     C:\Users\lenovo\AppData\Local\TodoWorkbench\logs\launcher-20261020.log
+logPath     C:\Users\<用户名>\AppData\Local\TodoWorkbench\logs\launcher-20261020.log
 用户        lenovo   session=2   elevated=False
 shell       explorer=18608,26352
 默认浏览器  MSEdgeHTM -> "C:\...\msedge.exe" --single-argument %1
@@ -555,8 +555,8 @@ C:\Users\<u>\AppData\Local\TodoWorkbench\               ← 用户数据，升�
   "schema": 1,
   "mode": "perUser",                  // perUser | perMachine
   "displayName": "待办工作台",
-  "installDir": "C:\\Users\\lenovo\\AppData\\Local\\Programs\\TodoWorkbench",
-  "dataDir": "C:\\Users\\lenovo\\AppData\\Local\\TodoWorkbench\\data",
+  "installDir": "C:\\Users\\<用户名>\\AppData\\Local\\Programs\\TodoWorkbench",
+  "dataDir": "C:\\Users\\<用户名>\\AppData\\Local\\TodoWorkbench\\data",
   "version": "1.1.0",
   "installedAt": "2026-10-20T09:30:12+08:00",
   "uninstallKey": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TodoWorkbench",
@@ -858,7 +858,7 @@ csc 参考集（安装器/卸载器需要额外加 `System.Drawing.dll`）：
 │   (•) 仅为我安装（推荐）  不需要管理员权限       │
 │   ( ) 为这台电脑上的所有用户安装  需要管理员权限  │
 │                                                 │
-│  安装位置  [C:\Users\lenovo\AppData\Local\Programs\TodoWorkbench  ] [浏览…]
+│  安装位置  [C:\Users\<用户名>\AppData\Local\Programs\TodoWorkbench  ] [浏览…]
 │            需要约 95 MB 可用空间，当前可用 xxx GB
 │                                                 │
 │  [x] 创建桌面快捷方式                            │
@@ -866,7 +866,7 @@ csc 参考集（安装器/卸载器需要额外加 `System.Drawing.dll`）：
 │  [ ] 保留修复包（+35MB，程序文件被杀软删除时可自愈）│
 │  ─────────────────────────────────────────────  │
 │  你的待办数据将保存在：                          │
-│    C:\Users\lenovo\AppData\Local\TodoWorkbench  │
+│    C:\Users\<用户名>\AppData\Local\TodoWorkbench  │
 │  升级/卸载都不会删除这里。                       │
 │                                                 │
 │                          [ 取消 ]  [ 安装 ]     │

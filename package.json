@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "本地待办工作台：分类、优先级、自动归档、文件夹关联、聚焦提醒",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sorenzc/Soren-todo-Workbench.git"
+  },
   "engines": {
     "node": ">=22.5.0"
   },

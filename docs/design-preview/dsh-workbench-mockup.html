@@ -1,0 +1,782 @@
+﻿<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>待办工作台 · DSH 插件高保真稿</title>
+<style>
+/* ==========================================================================
+   0. DSH 主题 token 兜底（真实插件里删除本段，直接吃宿主 --dsw-*）
+      浅色值取自 dsh-client-ui-theme/lib/client.js 的别名层，深色挂在
+      body[data-ds-dark-theme] 上——与宿主主题呈现器写的属性名一致。
+   ========================================================================== */
+:root{
+  --dsw-alias-bg-base:#fff;
+  --dsw-alias-bg-layer-1:#fff;
+  --dsw-alias-bg-layer-2:#fff;
+  --dsw-alias-bg-layer-3:#fff;
+  --dsw-alias-bg-module-platform:#f5f6f7;
+  --dsw-alias-bg-multi-select:#f9fafb;
+  --dsw-alias-bg-overlay:#e9ecf2;
+  --dsw-alias-bg-skeleton:#0000000a;
+  --dsw-alias-label-primary:#0f1115;
+  --dsw-alias-label-secondary:#61666b;
+  --dsw-alias-label-tertiary:#81858c;
+  --dsw-alias-label-caption:#adb2b8;
+  --dsw-alias-label-dimmed:#e1e5ee;
+  --dsw-alias-border-l1:#0000000a;
+  --dsw-alias-border-l2:#0000001a;
+  --dsw-alias-border-l3:#0000001f;
+  --dsw-alias-border-l4:#00000029;
+  --dsw-alias-state-business-primary:#4176e6;
+  --dsw-alias-state-business-tertiary:#e4edfd;
+  --dsw-alias-state-success-primary:#22c55e;
+  --dsw-alias-state-success-tertiary:#e6faed;
+  --dsw-alias-state-warn-primary:#f59e0b;
+  --dsw-alias-state-warn-label:#dd8629;
+  --dsw-alias-state-warn-tertiary:#fef5e7;
+  --dsw-alias-state-error-primary:#ec1313;
+  --dsw-alias-bg-document-selection:rgba(59,130,246,.4);
+  --dsw-alias-toast-bg:#353638;
+  --dsw-alias-toast-label:#fff;
+  --dsw-radius-xs:4px; --dsw-radius-sm:8px; --dsw-radius-md:12px;
+  --dsw-radius-lg:16px; --dsw-radius-xl:20px;
+  --dsw-shadow-lv1:0 2px 4px 0 #0000000d;
+  --dsw-shadow-lv2:0 4px 12px 0 #00000005,0 2px 8px 0 #0000000a;
+  --dsw-shadow-lv3:0 0 1px 0 #0003,0 0 4px 0 #00000005,0 12px 32px 0 #00000014;
+  --dsw-elevation-stroke-color:var(--dsw-alias-border-l4);
+  --dsw-elevation-stroke:0 0 0 .5px var(--dsw-elevation-stroke-color);
+  --dsw-focus-ring-width:2px;
+  --dsw-focus-ring-color:var(--dsw-alias-state-business-primary);
+  --dsh-content-font-size:14px;
+  --dsh-content-font-size-secondary:13px;
+  /* 框架发布的几何变量 */
+  --dsh-frame-top-clearance:38px;
+  --dsh-windows-content-radius:8px;
+  --dsh-windows-sidebar-width:280px;
+}
+[data-ds-dark-theme]{
+  --dsw-alias-bg-base:#151517;
+  --dsw-alias-bg-layer-1:#232324;
+  --dsw-alias-bg-layer-2:#2c2c2e;
+  --dsw-alias-bg-layer-3:#353638;
+  --dsw-alias-bg-module-platform:#353638;
+  --dsw-alias-bg-multi-select:#212123;
+  --dsw-alias-bg-overlay:#61666b;
+  --dsw-alias-bg-skeleton:#ffffff14;
+  --dsw-alias-label-primary:#f9fafb;
+  --dsw-alias-label-secondary:#cfd3d6;
+  --dsw-alias-label-tertiary:#adb2b8;
+  --dsw-alias-label-caption:#81858c;
+  --dsw-alias-label-dimmed:#43454a;
+  --dsw-alias-border-l1:#ffffff0f;
+  --dsw-alias-border-l2:#ffffff1f;
+  --dsw-alias-border-l3:#ffffff29;
+  --dsw-alias-border-l4:#ffffff33;
+  --dsw-alias-state-business-primary:#7aaaff;
+  --dsw-alias-state-business-tertiary:#34415b;
+  --dsw-alias-state-success-primary:#22c55e;
+  --dsw-alias-state-success-tertiary:#233c2c;
+  --dsw-alias-state-warn-primary:#f59e0b;
+  --dsw-alias-state-warn-label:#f7ad31;
+  --dsw-alias-state-warn-tertiary:#27241f;
+  --dsw-alias-state-error-primary:#f25a5a;
+  --dsw-alias-toast-bg:#43454a;
+}
+
+/* ==========================================================================
+   1. 工作台派生 token —— 只允许引用 --dsw-*，不写字面色（除优先级/品牌图形）
+   ========================================================================== */
+.wb,.frame{
+  /* 表面 */
+  --wb-surface:var(--dsw-alias-bg-base);
+  --wb-card:var(--dsw-alias-bg-layer-1);
+  --wb-sunken:var(--dsw-alias-bg-multi-select);
+  --wb-hover:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);
+  --wb-active:color-mix(in srgb,var(--dsw-alias-label-primary) 9%,transparent);
+  --wb-selected:var(--dsw-alias-state-business-tertiary);
+  /* 文字 */
+  --wb-t1:var(--dsw-alias-label-primary);
+  --wb-t2:var(--dsw-alias-label-secondary);
+  --wb-t3:var(--dsw-alias-label-tertiary);
+  --wb-t4:var(--dsw-alias-label-caption);
+  /* 线 */
+  --wb-line:var(--dsw-alias-border-l1);
+  --wb-ring:var(--dsw-alias-border-l2);
+  --wb-ring-strong:var(--dsw-alias-border-l3);
+  /* 强调（复用宿主业务色，不再自带 #2563EB） */
+  --wb-accent:var(--dsw-alias-state-business-primary);
+  --wb-accent-soft:var(--dsw-alias-state-business-tertiary);
+  /* 优先级：P0 错误 / P1 警告 / P2 业务 / P3 三级字 */
+  --wb-p0:var(--dsw-alias-state-error-primary);
+  --wb-p1:var(--dsw-alias-state-warn-primary);
+  --wb-p2:var(--dsw-alias-state-business-primary);
+  --wb-p3:var(--dsw-alias-label-tertiary);
+  /* 密度档：舒适 36 / 紧凑 28；由面板工具栏切换 */
+  --wb-row:36px;
+  --wb-group-head:28px;
+  --wb-gap:12px;
+  /* 字阶：整数档，跟随宿主正文档 */
+  --wb-fs-base:var(--dsh-content-font-size);
+  --wb-fs-sec:var(--dsh-content-font-size-secondary);
+  --wb-fs-label:12px;
+  --wb-fs-mini:11px;
+  --wb-rail:196px;
+  --wb-detail:320px;
+}
+
+/* ==========================================================================
+   2. 演示外壳（模拟 DSH AppFrame，仅用于出图，不进插件）
+   ========================================================================== */
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+  font-size:14px;line-height:1.5;
+  background:#e8eaed;
+  color:var(--dsw-alias-label-primary);
+  -webkit-font-smoothing:antialiased;
+}
+body[data-ds-dark-theme]{background:#0a0b0c}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none;padding:0}
+ul{list-style:none;margin:0;padding:0}
+svg{display:block}
+:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color);outline-offset:2px}
+::selection{background:var(--dsw-alias-bg-document-selection)}
+
+.page{padding:24px 28px 64px}
+.page-title{font-size:15px;font-weight:600;letter-spacing:.01em;margin:0 0 4px}
+.page-note{font-size:12px;color:var(--dsw-alias-label-tertiary);margin:0 0 20px}
+.frame{
+  width:1440px;height:900px;border-radius:var(--dsh-windows-content-radius);
+  overflow:hidden;display:flex;flex-direction:column;
+  background:var(--dsw-alias-bg-base);
+  box-shadow:0 24px 64px rgba(0,0,0,.18),0 0 0 1px var(--dsw-alias-border-l3);
+  position:relative;
+}
+.frame + .frame{margin-top:36px}
+/* Windows 标题栏区（顶部 clearance） */
+.frame-chrome{
+  height:var(--dsh-frame-top-clearance);flex:none;display:flex;align-items:center;
+  padding:0 12px;gap:8px;background:var(--dsw-alias-bg-base);
+}
+.dots{display:flex;gap:6px}
+.dots i{width:10px;height:10px;border-radius:50%;background:var(--dsw-alias-label-dimmed);corner-shape:round}
+.frame-body{flex:1;display:flex;min-height:0}
+
+/* ---------- 左栏 280px（DSH 自有，不可定制，仅示意） ---------- */
+.sb{
+  width:var(--dsh-windows-sidebar-width);flex:none;display:flex;flex-direction:column;
+  background:var(--dsw-alias-bg-module-platform);
+  border-right:1px solid var(--dsw-alias-border-l1);padding:8px 8px 6px;
+}
+.sb-brand{display:flex;align-items:center;gap:8px;padding:6px 8px 12px;font-size:13px;font-weight:600}
+.sb-brand span.mark{
+  width:20px;height:20px;border-radius:var(--dsw-radius-sm);background:var(--wb-accent,var(--dsw-alias-state-business-primary));
+  display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700
+}
+.sb-group{font-size:11px;color:var(--dsw-alias-label-caption);padding:8px 8px 4px;letter-spacing:.02em}
+.sb-item{
+  display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:var(--dsw-radius-sm);
+  font-size:13px;color:var(--dsw-alias-label-secondary)
+}
+.sb-item.on{background:var(--wb-active,rgba(0,0,0,.08));color:var(--dsw-alias-label-primary)}
+.sb-item .cnt{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-caption)}
+.sb-spacer{flex:1}
+/* 面板列表：图标入口（sidebar.panellist）。选中态 = 已选中 workbench 主面板 */
+.sb-panels{display:flex;align-items:center;gap:4px;padding:6px 4px 2px;border-top:1px solid var(--dsw-alias-border-l1);margin-top:6px}
+.sb-panel-btn{
+  width:30px;height:30px;border-radius:var(--dsw-radius-sm);display:grid;place-items:center;
+  color:var(--dsw-alias-label-secondary);position:relative
+}
+.sb-panel-btn:hover{background:var(--wb-hover,rgba(0,0,0,.05));color:var(--dsw-alias-label-primary)}
+.sb-panel-btn[aria-current="page"]{color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-tertiary)}
+.sb-panel-btn .badge{
+  position:absolute;top:3px;right:2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;
+  background:var(--dsw-alias-state-error-primary);color:#fff;font-size:9px;line-height:14px;text-align:center;
+  corner-shape:round;font-variant-numeric:tabular-nums
+}
+
+/* ---------- 中栏：工作台主面板（本插件交付物） ---------- */
+.wb-main{
+  flex:1;min-width:0;display:flex;flex-direction:column;
+  background:var(--wb-surface);
+  padding-top:0;
+}
+/* 入口型主面板必须吃框架的顶部 clearance */
+.wb-head{
+  flex:none;display:flex;align-items:center;gap:10px;
+  padding:calc(var(--dsh-frame-top-clearance) - 4px) 16px 10px;
+}
+.wb-head h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.01em}
+.wb-head .sub{font-size:12px;color:var(--wb-t3);font-variant-numeric:tabular-nums}
+.wb-head .grow{flex:1}
+.wb-toolbar{flex:none;display:flex;align-items:center;gap:6px;padding:0 16px 10px}
+.wb-scroll{flex:1;min-height:0;overflow:auto;padding:0 16px 16px}
+.wb-foot{
+  flex:none;height:26px;display:flex;align-items:center;gap:10px;padding:0 16px;
+  border-top:1px solid var(--wb-line);font-size:11px;color:var(--wb-t4);font-variant-numeric:tabular-nums
+}
+
+/* 面板内部：视图导航条（原 236px rail 的缩减版） */
+.wb-split{flex:1;display:flex;min-height:0}
+.wb-rail{
+  width:var(--wb-rail);flex:none;padding:2px 8px 12px;overflow:auto;
+  border-right:1px solid var(--wb-line)
+}
+.wb-rail .grp{font-size:11px;color:var(--wb-t4);padding:10px 8px 4px;letter-spacing:.02em}
+.wb-rail .it{
+  display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:var(--dsw-radius-sm);
+  font-size:13px;color:var(--wb-t2);width:100%;text-align:left
+}
+.wb-rail .it:hover{background:var(--wb-hover);color:var(--wb-t1)}
+.wb-rail .it.on{background:var(--wb-selected);color:var(--wb-accent);font-weight:500}
+.wb-rail .it .cnt{margin-left:auto;font-size:11px;color:var(--wb-t4);font-variant-numeric:tabular-nums}
+.wb-rail .it .dot{width:7px;height:7px;border-radius:2px;flex:none;corner-shape:round}
+
+/* 列表列 */
+.wb-list{flex:1;min-width:0;overflow:auto;padding:2px 16px 16px}
+
+/* ---------- 组件：分组内嵌卡片 + 任务行 ---------- */
+.group{margin-top:var(--wb-gap)}
+.group-head{
+  display:flex;align-items:center;gap:8px;height:var(--wb-group-head);
+  padding:0 4px;font-size:12px;font-weight:600;color:var(--wb-t2)
+}
+.group-head .cnt{margin-left:auto;font-weight:400;font-size:11px;color:var(--wb-t4);font-variant-numeric:tabular-nums}
+.card{
+  background:var(--wb-card);border-radius:var(--dsw-radius-md);
+  box-shadow:0 0 0 1px var(--wb-ring);
+  overflow:hidden
+}
+.row{
+  display:flex;align-items:center;gap:10px;height:var(--wb-row);padding:0 12px;
+  position:relative;cursor:default
+}
+.row + .row::before{
+  content:"";position:absolute;left:12px;right:0;top:0;height:1px;background:var(--wb-line)
+}
+.row:hover{background:var(--wb-hover)}
+.row[aria-selected="true"]{background:var(--wb-selected)}
+.row[aria-selected="true"]::after{
+  content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:1px;
+  background:var(--wb-accent)
+}
+.ck{
+  width:16px;height:16px;flex:none;border-radius:50%;corner-shape:round;
+  border:1.5px solid var(--wb-ring-strong);background:transparent;display:grid;place-items:center
+}
+.ck:hover{border-color:var(--wb-accent)}
+.ck[aria-checked="true"]{border-color:var(--wb-accent);background:var(--wb-accent)}
+.ck[aria-checked="true"] svg{stroke:#fff}
+.ck[aria-checked="mixed"]{border-color:var(--wb-t3);background:
+  linear-gradient(var(--wb-t3),var(--wb-t3)) center/8px 1.5px no-repeat}
+.title{
+  font-size:var(--wb-fs-base);color:var(--wb-t1);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.row.done .title{color:var(--wb-t3);text-decoration:line-through;text-decoration-color:var(--wb-t4)}
+.meta{display:flex;align-items:center;gap:6px;flex:none}
+.chip{
+  display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px;
+  border-radius:var(--dsw-radius-xs);font-size:var(--wb-fs-mini);line-height:1;
+  color:var(--wb-t2);background:var(--wb-sunken);white-space:nowrap;
+  font-variant-numeric:tabular-nums
+}
+.chip.ghost{background:transparent;box-shadow:0 0 0 1px var(--wb-ring);color:var(--wb-t3)}
+.chip.biz{background:var(--wb-accent-soft);color:var(--wb-accent)}
+.chip.warn{background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label)}
+.chip.err{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}
+.pdot{width:6px;height:6px;border-radius:50%;flex:none;corner-shape:round}
+.pdot.p0{background:var(--wb-p0)} .pdot.p1{background:var(--wb-p1)}
+.pdot.p2{background:var(--wb-p2)} .pdot.p3{background:var(--wb-p3)}
+.row-acts{display:none;align-items:center;gap:2px;flex:none}
+.row:hover .row-acts{display:flex}
+.row:hover .meta .hide-on-hover{display:none}
+
+/* ---------- 组件：按钮 ---------- */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;
+  border-radius:var(--dsw-radius-sm);font-size:13px;color:var(--wb-t1);
+  background:transparent;box-shadow:0 0 0 1px var(--wb-ring)
+}
+.btn:hover{background:var(--wb-hover)}
+.btn.primary{
+  background:var(--wb-accent);color:#fff;box-shadow:none;font-weight:500;
+  --dsw-focus-ring-color:#fff
+}
+.btn.primary:hover{background:color-mix(in srgb,var(--wb-accent) 88%,#000)}
+[data-ds-dark-theme] .btn.primary{color:#0f1115}
+.btn.quiet{box-shadow:none;color:var(--wb-t2)}
+.btn.quiet:hover{background:var(--wb-hover);color:var(--wb-t1)}
+.btn.sm{height:24px;padding:0 8px;font-size:12px}
+.btn.icon{width:28px;padding:0;justify-content:center}
+.btn.icon.sm{width:24px}
+.seg{display:inline-flex;padding:2px;border-radius:var(--dsw-radius-sm);background:var(--wb-sunken);gap:2px}
+.seg button{
+  height:22px;padding:0 9px;border-radius:var(--dsw-radius-xs);font-size:12px;color:var(--wb-t2)
+}
+.seg button[aria-pressed="true"]{background:var(--wb-card);color:var(--wb-t1);box-shadow:var(--dsw-shadow-lv1)}
+.search{
+  display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;min-width:180px;
+  border-radius:var(--dsw-radius-sm);background:var(--wb-sunken);color:var(--wb-t3);font-size:13px
+}
+.search kbd{
+  margin-left:auto;font:inherit;font-size:10px;color:var(--wb-t4);
+  padding:1px 4px;border-radius:3px;box-shadow:0 0 0 1px var(--wb-ring)
+}
+
+/* ---------- 右栏 45%：今日 tab（伴侣视图） ---------- */
+.wb-right{
+  width:45%;flex:none;display:flex;flex-direction:column;min-width:0;
+  background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1)
+}
+.tabstrip{
+  flex:none;height:34px;display:flex;align-items:center;gap:2px;padding:0 8px;
+  border-bottom:1px solid var(--dsw-alias-border-l1)
+}
+.tab{
+  height:24px;padding:0 8px;border-radius:var(--dsw-radius-xs);font-size:12px;
+  color:var(--dsw-alias-label-tertiary);display:inline-flex;align-items:center;gap:5px
+}
+.tab[aria-selected="true"]{background:var(--dsw-alias-state-business-tertiary);color:var(--dsw-alias-state-business-primary)}
+.tabstrip .grow{flex:1}
+.today{padding:12px 14px 16px;overflow:auto;flex:1}
+.today-h{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.today-h b{font-size:13px;font-weight:600}
+.today-h span{font-size:11px;color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}
+.bar{height:4px;border-radius:2px;background:var(--dsw-alias-bg-skeleton);overflow:hidden;margin:8px 0 4px}
+.bar i{display:block;height:100%;background:var(--dsw-alias-state-business-primary);border-radius:2px}
+.trow{display:flex;align-items:center;gap:8px;height:30px;font-size:13px;color:var(--dsw-alias-label-primary)}
+.trow .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .when{font-size:11px;color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}
+.trow.late .when{color:var(--dsw-alias-state-error-primary)}
+.tsec{margin-top:10px;font-size:11px;color:var(--dsw-alias-label-caption);letter-spacing:.02em}
+.notice{
+  margin-top:12px;padding:8px 10px;border-radius:var(--dsw-radius-sm);
+  background:var(--dsw-alias-bg-multi-select);font-size:11px;color:var(--dsw-alias-label-tertiary);
+  line-height:1.6
+}
+
+/* ---------- 详情列（宽屏第三列 / 窄屏抽屉） ---------- */
+.wb-detail{
+  width:var(--wb-detail);flex:none;display:flex;flex-direction:column;min-width:0;
+  background:var(--wb-card);border-left:1px solid var(--wb-ring)
+}
+.d-head{flex:none;padding:calc(var(--dsh-frame-top-clearance) - 6px) 14px 8px;display:flex;align-items:center;gap:6px}
+.d-head .grow{flex:1}
+.d-title{font-size:15px;font-weight:600;line-height:1.35;padding:0 14px 8px;color:var(--wb-t1)}
+.d-body{flex:1;overflow:auto;padding:0 14px 12px}
+.d-sec{margin-top:14px}
+.d-sec > h4{margin:0 0 6px;font-size:11px;font-weight:500;color:var(--wb-t4);letter-spacing:.02em}
+.kv{display:grid;grid-template-columns:76px 1fr;gap:6px 8px;font-size:13px;align-items:center}
+.kv dt{color:var(--wb-t3);font-size:12px}
+.kv dd{margin:0;color:var(--wb-t1);min-width:0}
+.note{
+  width:100%;min-height:88px;resize:vertical;padding:8px 10px;font-size:13px;line-height:1.6;
+  border-radius:var(--dsw-radius-sm);background:var(--wb-sunken);color:var(--wb-t1);
+  border:0;box-shadow:0 0 0 1px var(--wb-ring);outline-offset:1px
+}
+.tl{font-size:12px;color:var(--wb-t3);display:grid;gap:6px}
+.tl li{display:flex;gap:8px;align-items:baseline}
+.tl time{color:var(--wb-t4);font-variant-numeric:tabular-nums;font-size:11px;flex:none;width:78px;white-space:nowrap}
+.d-foot{flex:none;display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--wb-line)}
+
+/* ---------- 空 / 骨架 / toast ---------- */
+.empty{display:grid;place-items:center;align-content:center;gap:8px;padding:48px 16px;text-align:center}
+.empty .ico{width:44px;height:44px;border-radius:var(--dsw-radius-md);background:var(--wb-sunken);display:grid;place-items:center;color:var(--wb-t4)}
+.empty b{font-size:13px;font-weight:500;color:var(--wb-t2)}
+.empty p{margin:0;font-size:12px;color:var(--wb-t4)}
+.skel{height:12px;border-radius:6px;background:var(--dsw-alias-bg-skeleton)}
+
+/* 窄面板（<900px）：内部 rail 收起，视图切换进工具条 */
+#darkFrame .wb-rail{display:none}
+#darkFrame{--wb-detail:0px}
+/* ---------- 组件画廊 ---------- */
+.gal{
+  width:1440px;margin-top:36px;padding:24px 28px;border-radius:var(--dsh-windows-content-radius);
+  background:var(--dsw-alias-bg-base);box-shadow:0 0 0 1px var(--dsw-alias-border-l3)
+}
+.gal h2{font-size:13px;font-weight:600;margin:0 0 12px;color:var(--dsw-alias-label-primary)}
+.gal h3{font-size:11px;font-weight:500;color:var(--dsw-alias-label-caption);margin:18px 0 8px;letter-spacing:.03em}
+.gal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.sw{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.sw i{width:22px;height:22px;border-radius:var(--dsw-radius-xs);flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.sw code{font-size:10px;color:var(--dsw-alias-label-caption)}
+.rowflex{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+body.shot{overflow:hidden}
+body.shot .page{padding:0}
+body.shot .page-title,body.shot .page-note{display:none}
+body.shot .frame{width:1440px;height:900px;border-radius:0;box-shadow:none;margin:0}
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="page-title">待办工作台 · DSH 插件高保真稿 v1</p>
+  <p class="page-note">上：浅色 · 宽面板（选中「今日」＋宽屏详情列）　|　中：深色 · 窄面板＋右侧「今日」伴侣 tab＋清空空态　|　下：组件画廊。所有颜色取自 DSH <code>--dsw-*</code> 别名层。</p>
+
+<!-- ============================ 帧 A：浅色 ============================ -->
+<div class="frame">
+  <div class="frame-chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+  <div class="frame-body">
+
+    <!-- 左栏（DSH 自有） -->
+    <aside class="sb">
+      <div class="sb-brand"><span class="mark">D</span><span>DeepSeek Harness</span></div>
+      <div class="sb-group">工作区</div>
+      <div class="sb-item on"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4h12M2 8h12M2 12h8"/></svg>默认项目<span class="cnt">6</span></div>
+      <div class="sb-item"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="2"/></svg>SFH office<span class="cnt">3</span></div>
+      <div class="sb-item"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/></svg>dsh-gongwen<span class="cnt">2</span></div>
+      <div class="sb-spacer"></div>
+      <div class="sb-panels">
+        <button class="sb-panel-btn" aria-current="page" title="待办工作台">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5.5l1.6 1.6L7.4 4"/><path d="M3 12.5l1.6 1.6L7.4 11"/><path d="M10.5 5.6h4.5M10.5 12.6h4.5"/></svg>
+          <span class="badge">5</span>
+        </button>
+        <button class="sb-panel-btn" title="插件"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 3h4v2.2a1.8 1.8 0 002.6 1.6L15 6l0 4-1.4-.8A1.8 1.8 0 0011 10.8V15H7v-4.2A1.8 1.8 0 004.4 9.2L3 10V6l1.6.8A1.8 1.8 0 007 5.2z"/></svg></button>
+        <button class="sb-panel-btn" title="设置"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="2.4"/><path d="M9 2.5v2M9 13.5v2M2.5 9h2M13.5 9h2M4.4 4.4l1.4 1.4M12.2 12.2l1.4 1.4M13.6 4.4l-1.4 1.4M5.8 12.2l-1.4 1.4"/></svg></button>
+      </div>
+    </aside>
+
+    <!-- 中栏：工作台主面板 -->
+    <main class="wb wb-main">
+      <div class="wb-head">
+        <h1>今日</h1>
+        <span class="sub">6 项待办 · 2 项逾期 · 预计 3.5 小时</span>
+        <span class="grow"></span>
+        <button class="btn sm primary"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 2.5v9M2.5 7h9"/></svg>新建</button>
+      </div>
+      <div class="wb-toolbar">
+        <div class="search">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="3.6"/><path d="M9 9l2.5 2.5"/></svg>
+          <span>筛选或跳转…</span>
+          <kbd>F</kbd>
+        </div>
+        <div class="seg" role="group" aria-label="范围">
+          <button aria-pressed="true">今日</button>
+          <button aria-pressed="false">近 7 天</button>
+          <button aria-pressed="false">逾期</button>
+        </div>
+        <span class="grow" style="flex:1"></span>
+        <button class="btn quiet icon" title="日历"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="3.4" width="11.6" height="10.2" rx="2"/><path d="M2.2 6.6h11.6M5.4 2v2.4M10.6 2v2.4"/></svg></button>
+        <button class="btn quiet icon" title="密度"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg></button>
+        <button class="btn quiet icon" title="更多"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.6" cy="8" r="1.2"/></svg></button>
+      </div>
+
+      <div class="wb-split">
+        <!-- 视图导航（原 236px rail） -->
+        <nav class="wb-rail">
+          <div class="grp">视图</div>
+          <button class="it on"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.4"/></svg>今日<span class="cnt">6</span></button>
+          <button class="it"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h6.6"/></svg>全部<span class="cnt">31</span></button>
+          <button class="it"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2.6l1.7 3.5 3.9.6-2.8 2.7.7 3.8L8 11.4l-3.5 1.8.7-3.8L2.4 6.7l3.9-.6z"/></svg>近期<span class="cnt">9</span></button>
+          <button class="it"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.6 4h7.8l3 3v5H2.6z"/></svg>已归档</button>
+          <div class="grp">分类</div>
+          <button class="it"><span class="dot" style="background:var(--wb-p2)"></span>产品<span class="cnt">9</span></button>
+          <button class="it"><span class="dot" style="background:var(--dsw-alias-state-success-primary)"></span>运营<span class="cnt">7</span></button>
+          <button class="it"><span class="dot" style="background:var(--wb-p1)"></span>财务<span class="cnt">4</span></button>
+          <button class="it"><span class="dot" style="background:var(--wb-t3)"></span>个人<span class="cnt">11</span></button>
+          <div class="grp">每月例行</div>
+          <button class="it"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M12.6 8a4.6 4.6 0 11-1.4-3.3"/><path d="M13 2.6v2.6h-2.6"/></svg>本月 · 36 期<span class="cnt">4</span></button>
+        </nav>
+
+        <!-- 列表列 -->
+        <div class="wb-list">
+          <div class="group">
+            <div class="group-head">逾期<span class="cnt">2</span></div>
+            <div class="card">
+              <div class="row">
+                <button class="ck" aria-checked="false"></button>
+                <span class="pdot p0" title="P0"></span>
+                <span class="title">和财务确认 10 月上架预算口径</span>
+                <span class="meta"><span class="chip err">逾期 2 天</span><span class="chip hide-on-hover">1h</span></span>
+                <span class="row-acts">
+                  <button class="btn quiet icon sm" title="打开文件夹"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.4 4.6h4l1.4 1.6h5.8v6.2H2.4z"/></svg></button>
+                </span>
+              </div>
+              <div class="row">
+                <button class="ck" aria-checked="false"></button>
+                <span class="pdot p1" title="P1"></span>
+                <span class="title">周报数据核对（渠道侧 GMV 口径）</span>
+                <span class="meta"><span class="chip err">逾期 1 天</span><span class="chip hide-on-hover">40m</span></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-head">今天到期<span class="cnt">3</span></div>
+            <div class="card">
+              <div class="row" aria-selected="true">
+                <button class="ck" aria-checked="false"></button>
+                <span class="pdot p1" title="P1"></span>
+                <span class="title">插件商店提交材料（截图 + 描述）</span>
+                <span class="meta"><span class="chip biz">14:00</span><span class="chip hide-on-hover">2h</span><span class="chip ghost hide-on-hover">分发</span></span>
+                <span class="row-acts">
+                  <button class="btn quiet icon sm" title="打开文件夹"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.4 4.6h4l1.4 1.6h5.8v6.2H2.4z"/></svg></button>
+                  <button class="btn quiet icon sm" title="更多"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.6" cy="8" r="1.1"/></svg></button>
+                </span>
+              </div>
+              <div class="row">
+                <button class="ck" aria-checked="false"></button>
+                <span class="pdot p2" title="P2"></span>
+                <span class="title">把「今日聚焦」拆成可复用的今日页</span>
+                <span class="meta"><span class="chip">17:30</span><span class="chip hide-on-hover">1h</span><span class="chip ghost hide-on-hover">设计</span></span>
+              </div>
+              <div class="row done">
+                <button class="ck" aria-checked="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke-width="1.8" stroke-linecap="round"><path d="M1.8 5.2l2.2 2.2 4.2-4.4"/></svg></button>
+                <span class="pdot p3" title="P3"></span>
+                <span class="title">回复 dsh 仓库 issue #212</span>
+                <span class="meta"><span class="chip ghost">09:12 完成</span></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-head">本月例行 · 待确认<span class="cnt">1</span></div>
+            <div class="card">
+              <div class="row">
+                <button class="ck" aria-checked="false"></button>
+                <span class="pdot p2" title="P2"></span>
+                <span class="title">10 月个税申报</span>
+                <span class="meta"><span class="chip warn">10-25 截止</span><span class="chip ghost hide-on-hover">例行</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 详情列 -->
+        <aside class="wb-detail">
+          <div class="d-head">
+            <span class="chip biz">今天 14:00</span>
+            <span style="flex:1"></span>
+            <button class="btn quiet icon sm" title="关闭详情"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.4 3.4l7.2 7.2M10.6 3.4l-7.2 7.2"/></svg></button>
+          </div>
+          <div class="d-title">插件商店提交材料（截图 + 描述）</div>
+          <div class="d-body">
+            <div class="seg" role="group" aria-label="状态">
+              <button aria-pressed="true">进行中</button>
+              <button aria-pressed="false">完成</button>
+              <button aria-pressed="false">放下</button>
+            </div>
+            <div class="d-sec">
+              <dl class="kv">
+                <dt>优先级</dt><dd><span class="pdot p1" style="display:inline-block;vertical-align:1px"></span> P1 重要</dd>
+                <dt>截止</dt><dd>2026-10-20 14:00</dd>
+                <dt>预估</dt><dd>2 小时</dd>
+                <dt>分类</dt><dd>产品</dd>
+                <dt>标签</dt><dd class="rowflex"><span class="chip ghost">分发</span><span class="chip ghost">商店</span></dd>
+              </dl>
+            </div>
+            <div class="d-sec">
+              <h4>笔记</h4>
+              <textarea class="note" spellcheck="false">1. 1440/900 两张截图（浅色、深色）
+2. 一段 40 字以内描述
+3. 兼容区间 ≥0.2.0-rc.1 &lt;0.3.0-0</textarea>
+            </div>
+            <div class="d-sec">
+              <h4>关联</h4>
+              <button class="btn sm"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.4 4.6h4l1.4 1.6h5.8v6.2H2.4z"/></svg>打开文件夹</button>
+            </div>
+            <div class="d-sec">
+              <h4>记录</h4>
+              <ul class="tl">
+                <li><time>10-18 09:20</time><span>创建</span></li>
+                <li><time>10-19 16:05</time><span>状态 待办 → 进行中</span></li>
+                <li><time>10-20 09:41</time><span>截止日期改为 10-20 14:00</span></li>
+              </ul>
+            </div>
+          </div>
+          <div class="d-foot">
+            <button class="btn primary" style="flex:1;justify-content:center">完成</button>
+            <button class="btn">延后</button>
+          </div>
+        </aside>
+      </div>
+
+      <div class="wb-foot">
+        <span>今日 6 · 逾期 2 · 完成 1</span>
+        <span>·</span>
+        <span>下次备份 18:00</span>
+        <span style="flex:1"></span>
+        <span>F 筛选 · Ctrl+Enter 完成</span>
+      </div>
+    </main>
+
+  </div>
+</div>
+
+<!-- ============================ 帧 B：深色 + 空态 ============================ -->
+<div class="frame" id="darkFrame" data-ds-dark-theme>
+  <div class="frame-chrome"><div class="dots"><i></i><i></i><i></i></div></div>
+  <div class="frame-body">
+
+    <aside class="sb">
+      <div class="sb-brand"><span class="mark" style="background:var(--dsw-alias-state-business-primary);color:#0f1115">D</span><span>DeepSeek Harness</span></div>
+      <div class="sb-group">工作区</div>
+      <div class="sb-item on"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4h12M2 8h12M2 12h8"/></svg>默认项目<span class="cnt">6</span></div>
+      <div class="sb-item"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="2"/></svg>SFH office<span class="cnt">3</span></div>
+      <div class="sb-spacer"></div>
+      <div class="sb-panels">
+        <button class="sb-panel-btn" aria-current="page" title="待办工作台">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5.5l1.6 1.6L7.4 4"/><path d="M3 12.5l1.6 1.6L7.4 11"/><path d="M10.5 5.6h4.5M10.5 12.6h4.5"/></svg>
+          <span class="badge">5</span>
+        </button>
+        <button class="sb-panel-btn" title="插件"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 3h4v2.2a1.8 1.8 0 002.6 1.6L15 6l0 4-1.4-.8A1.8 1.8 0 0011 10.8V15H7v-4.2A1.8 1.8 0 004.4 9.2L3 10V6l1.6.8A1.8 1.8 0 007 5.2z"/></svg></button>
+      </div>
+    </aside>
+
+    <main class="wb wb-main">
+      <div class="wb-head">
+        <h1>今日</h1>
+        <span class="sub">0 项待办 · 清空</span>
+        <span class="grow"></span>
+        <button class="btn sm primary"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 2.5v9M2.5 7h9"/></svg>新建</button>
+      </div>
+      <div class="wb-toolbar">
+        <div class="search">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="3.6"/><path d="M9 9l2.5 2.5"/></svg>
+          <span>筛选或跳转…</span><kbd>F</kbd>
+        </div>
+        <div class="seg"><button aria-pressed="true">今日</button><button aria-pressed="false">近 7 天</button><button aria-pressed="false">逾期</button></div>
+        <span style="flex:1"></span>
+        <button class="btn quiet icon" title="日历"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="3.4" width="11.6" height="10.2" rx="2"/><path d="M2.2 6.6h11.6M5.4 2v2.4M10.6 2v2.4"/></svg></button>
+        <button class="btn quiet icon" title="更多"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.6" cy="8" r="1.2"/></svg></button>
+      </div>
+      <div class="wb-split">
+        <nav class="wb-rail">
+          <div class="grp">视图</div>
+          <button class="it on">今日<span class="cnt">0</span></button>
+          <button class="it">全部<span class="cnt">31</span></button>
+          <button class="it">近期<span class="cnt">9</span></button>
+          <button class="it">已归档</button>
+          <div class="grp">分类</div>
+          <button class="it"><span class="dot" style="background:var(--wb-p2)"></span>产品<span class="cnt">9</span></button>
+          <button class="it"><span class="dot" style="background:var(--dsw-alias-state-success-primary)"></span>运营<span class="cnt">7</span></button>
+        </nav>
+        <div class="wb-list" style="display:flex;flex-direction:column">
+          <div class="empty" style="flex:1">
+            <div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 7.5l2.2 2.2L10.4 5"/><path d="M4 17l2.2 2.2L10.4 15"/><path d="M14 8h6M14 17.4h6"/></svg></div>
+            <b>今天已经清空</b>
+            <p>逾期 0 · 完成 6。要不要看一眼「近期」？</p>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button class="btn sm">查看近期</button>
+              <button class="btn sm quiet">记录一条</button>
+            </div>
+          </div>
+          <div class="group" style="margin-top:0;margin-bottom:4px;opacity:.5">
+            <div class="group-head">加载骨架（1.2s 以上才出现）</div>
+            <div class="card" style="padding:10px;display:grid;gap:8px">
+              <div class="skel" style="width:62%"></div>
+              <div class="skel" style="width:78%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wb-foot"><span>今日 0 · 逾期 0 · 完成 6</span><span style="flex:1"></span><span>下次备份 18:00</span></div>
+    </main>
+
+    <section class="wb-right" style="width:45%">
+      <div class="tabstrip">
+        <button class="tab" aria-selected="false">文件</button>
+        <button class="tab" aria-selected="true">今日</button>
+        <span class="grow"></span>
+      </div>
+      <div class="today">
+        <div class="today-h"><b>今天已全部完成</b><span>6/6</span></div>
+        <div class="bar"><i style="width:100%;background:var(--dsw-alias-state-success-primary)"></i></div>
+        <div style="font-size:11px;color:var(--dsw-alias-label-caption)">归档到 archive\2026\2026-10\2026-10-20.md</div>
+        <div class="notice">深色由 <code>body[data-ds-dark-theme]</code> 驱动，插件不写 <code>@media (prefers-color-scheme)</code>，避免与宿主手动切主题打架。</div>
+        <div class="notice">所有色值均指向 <code>--dsw-*</code>：宿主换主题/换字阶（--dsh-content-font-size 10~22）时本面板自动跟随。</div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- ============================ 组件画廊 ============================ -->
+<div class="gal wb">
+  <h2>组件画廊（Design Tokens → 组件）</h2>
+  <div class="gal-grid">
+    <div>
+      <h3>颜色映射</h3>
+      <div style="display:grid;gap:8px">
+        <div class="sw"><i style="background:var(--dsw-alias-state-business-primary)"></i><div>强调 / 选中<br><code>--dsw-alias-state-business-primary</code></div></div>
+        <div class="sw"><i style="background:var(--dsw-alias-state-business-tertiary)"></i><div>选中底<br><code>--dsw-alias-state-business-tertiary</code></div></div>
+        <div class="sw"><i style="background:var(--dsw-alias-bg-layer-1);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)"></i><div>卡片面<br><code>--dsw-alias-bg-layer-1</code></div></div>
+        <div class="sw"><i style="background:var(--dsw-alias-state-error-primary)"></i><div>P0 / 逾期<br><code>--dsw-alias-state-error-primary</code></div></div>
+        <div class="sw"><i style="background:var(--dsw-alias-state-warn-primary)"></i><div>P1 / 临期<br><code>--dsw-alias-state-warn-primary</code></div></div>
+        <div class="sw"><i style="background:var(--dsw-alias-state-success-primary)"></i><div>完成<br><code>--dsw-alias-state-success-primary</code></div></div>
+      </div>
+    </div>
+    <div>
+      <h3>按钮</h3>
+      <div class="rowflex" style="margin-bottom:10px">
+        <button class="btn primary">完成</button>
+        <button class="btn">延后</button>
+        <button class="btn quiet">取消</button>
+      </div>
+      <div class="rowflex" style="margin-bottom:14px">
+        <button class="btn primary sm">新建</button>
+        <button class="btn sm">导出</button>
+        <button class="btn quiet icon sm">···</button>
+      </div>
+      <h3>分段 / 输入</h3>
+      <div class="rowflex">
+        <div class="seg"><button aria-pressed="true">今日</button><button aria-pressed="false">近 7 天</button></div>
+        <div class="search" style="min-width:120px">筛选…</div>
+      </div>
+      <h3>标签 chip</h3>
+      <div class="rowflex">
+        <span class="chip">默认</span><span class="chip biz">14:00</span>
+        <span class="chip warn">临期</span><span class="chip err">逾期</span><span class="chip ghost">分发</span>
+      </div>
+    </div>
+    <div>
+      <h3>任务行（三态）</h3>
+      <div class="card" style="margin-bottom:12px">
+        <div class="row" style="--wb-row:32px"><button class="ck" aria-checked="false"></button><span class="pdot p1"></span><span class="title">未完成</span><span class="meta"><span class="chip">1h</span></span></div>
+        <div class="row" aria-selected="true" style="--wb-row:32px"><button class="ck" aria-checked="false"></button><span class="pdot p2"></span><span class="title">选中</span><span class="meta"><span class="chip biz">14:00</span></span></div>
+        <div class="row done" style="--wb-row:32px"><button class="ck" aria-checked="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke-width="1.8" stroke-linecap="round"><path d="M1.8 5.2l2.2 2.2 4.2-4.4"/></svg></button><span class="pdot p3"></span><span class="title">已完成</span></div>
+      </div>
+      <h3>密度</h3>
+      <div style="font-size:11px;color:var(--dsw-alias-label-tertiary);line-height:1.9">
+        舒适 <code>--wb-row:36px</code>（默认）<br>
+        紧凑 <code>28px</code>（贴合 DSH 会话列表）<br>
+        宽松 <code>40px</code>（原实现）
+      </div>
+    </div>
+    <div>
+      <h3>优先级点</h3>
+      <div style="display:grid;gap:6px;font-size:12px;color:var(--dsw-alias-label-secondary)">
+        <div><span class="pdot p0" style="display:inline-block"></span> P0 紧急</div>
+        <div><span class="pdot p1" style="display:inline-block"></span> P1 重要</div>
+        <div><span class="pdot p2" style="display:inline-block"></span> P2 常规</div>
+        <div><span class="pdot p3" style="display:inline-block"></span> P3 随手</div>
+      </div>
+      <h3>圆角 / 高度</h3>
+      <div style="font-size:11px;color:var(--dsw-alias-label-tertiary);line-height:1.9">
+        卡片 <code>--dsw-radius-md</code> 12px<br>
+        chip <code>--dsw-radius-xs</code> 4px<br>
+        按钮 <code>--dsw-radius-sm</code> 8px<br>
+        checkbox 16px，<code>corner-shape:round</code>
+      </div>
+      <h3>焦点环</h3>
+      <button class="btn" style="outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color);outline-offset:2px">键盘焦点</button>
+    </div>
+  </div>
+</div>
+</div>
+
+
+<script>
+/* 出图模式：?shot=A（浅色宽面板）/?shot=B（深色窄面板+今日tab）/?shot=gal（组件画廊） */
+(function(){var m=/^(?:#|\?shot=)(A|B|gal)$/.exec(location.hash||location.search.replace('?shot=','#'));if(!m)return;
+  document.body.classList.add('shot');
+  var frames=[].slice.call(document.querySelectorAll('.frame')), gal=document.querySelector('.gal');
+  if(m[1]==='A'){frames[1].remove();gal.remove();}
+  else if(m[1]==='B'){frames[0].remove();gal.remove();document.body.setAttribute('data-ds-dark-theme','');}
+  else{frames.forEach(function(f){f.remove();});document.body.classList.add('wb');}
+})();
+</script>
+</body>
+</html>

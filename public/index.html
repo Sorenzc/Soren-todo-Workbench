@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>待办工作台</title>
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="apple-touch-icon" href="/app-icon-180.png" />
+<meta name="theme-color" content="#2563EB" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<script>window.__WB_TOKEN__ = '@@WB_TOKEN@@';</script>
+<div class="app">
+  <header class="titlebar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><path d="M9 16.5l4.5 4.5L23 11" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>待办工作台</span>
+      <button type="button" class="brand-sub" id="todayLabel" aria-haspopup="dialog" aria-expanded="false" title="点开月历，按天回顾"></button>
+    </div>
+    <button class="search-trigger" id="searchTrigger" title="搜索（Ctrl+K）">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>搜索待办、分类、标签</span>
+      <kbd>Ctrl K</kbd>
+    </button>
+    <div class="titlebar-actions">
+      <button class="icon-btn" id="btnBriefing" title="今日简报">简报</button>
+      <button class="icon-btn" id="btnBackup" title="备份数据库">备份</button>
+      <button class="icon-btn" id="btnCalendar" title="月历（PgUp / PgDn 翻月）" aria-haspopup="dialog" aria-expanded="false">日历</button>
+      <button class="icon-btn" id="btnContact" title="联系作者（微信扫码反馈）" aria-haspopup="dialog">联系作者</button>
+      <button class="icon-btn" id="btnReward" title="激励作者（支付宝扫码，完全自愿）" aria-haspopup="dialog">激励作者</button>
+      <button class="icon-btn" id="btnTheme" title="切换深浅色">◐</button>
+      <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+    </div>
+    <div class="cal-pop" id="calendar" role="dialog" aria-label="月历" hidden></div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <nav class="nav-views" id="navViews"></nav>
+      <section class="side-section">
+        <header class="side-head"><span>分类</span><button class="mini-btn" id="btnAddCat" title="新建分类">＋</button></header>
+        <ul class="cat-list" id="catList"></ul>
+      </section>
+      <section class="side-section" id="seriesSection">
+        <header class="side-head"><span>每月例行</span><button class="mini-btn" id="btnAddSeries" title="新建每月例行">＋</button></header>
+        <ul class="cat-list series-list" id="seriesList"></ul>
+      </section>
+      <section class="side-section" id="tagSection">
+        <header class="side-head"><span>标签</span></header>
+        <div class="tag-cloud" id="tagCloud"></div>
+      </section>
+      <footer class="side-foot">
+        <button class="ghost-btn" id="btnOpenArchive">打开归档文件夹</button>
+      </footer>
+    </aside>
+
+    <main class="main">
+      <div class="view-head">
+        <div class="view-heading">
+          <h1 id="viewTitle">聚焦</h1>
+          <p class="view-sub" id="viewSub"></p>
+        </div>
+        <div class="view-tools" id="viewTools"></div>
+        <button type="button" class="qa-submit" id="qaAdd" aria-haspopup="dialog" title="新建待办（N）">＋ 添加</button>
+      </div>
+      <div class="list" id="list"></div>
+      <div class="empty" id="empty" hidden></div>
+      <footer class="statusbar" id="statusBar"></footer>
+    </main>
+
+    <aside class="detail" id="detail" aria-live="polite"></aside>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="modal-root" id="modalRoot"></div>
+
+<div class="palette" id="palette" hidden>
+  <div class="palette-panel">
+    <input id="paletteInput" placeholder="跳转或搜索：输入关键字、分类名，或执行命令（如 新建 分类 设置）" />
+    <ul id="paletteList"></ul>
+    <div class="palette-hint">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

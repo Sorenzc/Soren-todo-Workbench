@@ -1,5 +1,5 @@
 // 领域仓储：任务 / 分类 / 标签 / 关联 / 搜索
-import { addDays, bad, camelize, clampStr, conflict, localDate, notFound, nowIso, uid } from './util.mjs';
+import { addDays, bad, camelize, clampStr, conflict, localDate, notFound, nowIso, pad2, PRIORITY_SHORT, uid } from './util.mjs';
 import { logEvent, tx } from './db.mjs';
 import { validateUserPath } from './paths.mjs';
 import { createSeries, normRecurrence } from './series.mjs';
@@ -9,7 +9,9 @@ const ROW_SELECT = `
     (SELECT count(*) FROM task_link l WHERE l.task_id = t.id) AS link_count,
     (SELECT l.id FROM task_link l WHERE l.task_id = t.id AND l.is_primary = 1) AS primary_link_id,
     (SELECT l.exists_state FROM task_link l WHERE l.task_id = t.id AND l.is_primary = 1) AS primary_link_state,
-    (SELECT group_concat(g.name, ' ') FROM task_tag tt JOIN tag g ON g.id = tt.tag_id WHERE tt.task_id = t.id) AS tag_names
+    (SELECT group_concat(g.name, ' ') FROM task_tag tt JOIN tag g ON g.id = tt.tag_id WHERE tt.task_id = t.id) AS tag_names,
+    (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL) AS child_count,
+    (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL AND ch.status = 'done') AS child_done
   FROM task t LEFT JOIN category c ON c.id = t.category_id
 `;
 
@@ -34,14 +36,23 @@ function normTime(v) {
   return s;
 }
 
+/** 提醒时间统一成 'YYYY-MM-DDTHH:MM'（本地时间，字典序即时间序），与 datetime-local 同形 */
+function normRemind(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).trim();
+  const m = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(s);
+  if (!m || !isRealDate(m[1])) throw bad('提醒时间格式应为 YYYY-MM-DDTHH:MM', 'INVALID_REMIND_AT');
+  return `${m[1]}T${m[2]}:${m[3]}`;
+}
+
 /* ------------------------------- 分类 ------------------------------- */
 
 export function listCategories(db) {
   return db
     .prepare(
       `SELECT c.*,
-         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status IN ('open','doing') AND t.deleted_at IS NULL) AS open_count,
-         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status = 'done' AND t.deleted_at IS NULL) AS done_count
+         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status IN ('open','doing') AND t.deleted_at IS NULL AND t.parent_id IS NULL) AS open_count,
+         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status = 'done' AND t.deleted_at IS NULL AND t.parent_id IS NULL) AS done_count
        FROM category c
        ORDER BY c.sort_order, c.name`
     )
@@ -136,7 +147,7 @@ export function taskTags(db, taskId) {
 /* ------------------------------- 任务 ------------------------------- */
 
 export function listTasks(db, opts = {}) {
-  const { status = 'open', categoryId, tag, q, due, doneOn, limit = 300 } = opts;
+  const { status = 'open', categoryId, tag, q, due, doneOn, parentId, limit = 300 } = opts;
   const where = ['t.deleted_at IS NULL'];
   const params = [];
 
@@ -148,6 +159,17 @@ export function listTasks(db, opts = {}) {
     where.push("t.status = 'dropped'");
   } else {
     where.push("t.status IN ('open','doing')");
+  }
+
+  // 子待办只在父任务详情里出现：默认列表排除，否则子条会混进「全部待办」，
+  // 逾期数与统计也会虚高。parentId=null 表示只要子项，parentId='xxx' 表示取某父的子项。
+  if (parentId === undefined) {
+    where.push('t.parent_id IS NULL');
+  } else if (parentId === null) {
+    where.push('t.parent_id IS NOT NULL');
+  } else {
+    where.push('t.parent_id = ?');
+    params.push(parentId);
   }
 
   if (categoryId) {
@@ -197,7 +219,8 @@ export function listTasks(db, opts = {}) {
   const order =
     status === 'done'
       ? 't.completed_at DESC'
-      : 't.priority ASC, t.due_on IS NULL, t.due_on ASC, t.created_at ASC, t.id ASC';
+      // 置顶最前；手动排序（sort_order > 0 表示拖过）优先于默认的「优先级 → 到期」口径
+      : 't.pinned DESC, t.sort_order DESC, t.priority ASC, t.due_on IS NULL, t.due_on ASC, t.created_at ASC, t.id ASC';
 
   const sql = `${ROW_SELECT} WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ?`;
   return db.prepare(sql).all(...params, Math.min(Number(limit) || 300, 1000));
@@ -210,7 +233,7 @@ export function calendarCounts(db, from, to) {
     .prepare(
       `SELECT t.due_on AS d, count(*) AS n
          FROM task t
-        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing')
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
           AND t.due_on IS NOT NULL AND t.due_on >= ? AND t.due_on <= ?
         GROUP BY t.due_on`
     )
@@ -221,12 +244,14 @@ export function calendarCounts(db, from, to) {
   const overdue = db
     .prepare(
       `SELECT count(*) AS n FROM task t
-        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing')
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
           AND t.due_on IS NOT NULL AND t.due_on < ?`
     )
     .get(from).n;
   const openTotal = db
-    .prepare(`SELECT count(*) AS n FROM task t WHERE t.deleted_at IS NULL AND t.status IN ('open','doing')`)
+    .prepare(
+      `SELECT count(*) AS n FROM task t WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL`
+    )
     .get().n;
 
   // 每一天完成了多少件：和「某天完成」列表同一谓词（区间 + 前 10 位日期），保证格子和列表同源
@@ -243,6 +268,28 @@ export function calendarCounts(db, from, to) {
   for (const r of doneRows) doneDays[r.d] = Number(r.n);
 
   return { days, done_days: doneDays, overdue: Number(overdue), open_total: Number(openTotal) };
+}
+
+/**
+ * 日历格子里的条目：和 calendarCounts 同一口径（未完成、未删、一级任务），
+ * 只是把「几条」换成「哪几条」。只给格子画 chip 够用的字段，不塞笔记正文。
+ */
+export function calendarItems(db, from, to) {
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.title, t.priority, t.due_on, t.due_time, t.series_id,
+              c.name AS category_name, c.color AS category_color,
+              (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL) AS child_count,
+              (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL AND ch.status = 'done') AS child_done
+         FROM task t LEFT JOIN category c ON c.id = t.category_id
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
+          AND t.due_on IS NOT NULL AND t.due_on >= ? AND t.due_on <= ?
+        ORDER BY t.due_on ASC, t.due_time IS NULL, t.due_time ASC, t.priority ASC, t.created_at ASC`
+    )
+    .all(from, to);
+  const items = {};
+  for (const r of rows) (items[r.due_on] || (items[r.due_on] = [])).push(r);
+  return items;
 }
 
 export function getTask(db, id) {
@@ -283,7 +330,18 @@ export function createTask(db, raw = {}) {
     estimateMin: input.estimateMin ? Math.max(1, Number(input.estimateMin)) : null,
     tags: input.tags || null,
     folder: input.folder || null,
+    remindAt: normRemind(input.remindAt),
   };
+
+  // 子待办：只允许一层（父自己必须是一级任务），且不能与每月例行同时出现
+  let parentId = null;
+  if (input.parentId !== undefined && input.parentId !== null && input.parentId !== '') {
+    const parent = db.prepare('SELECT id, parent_id, deleted_at FROM task WHERE id = ?').get(String(input.parentId));
+    if (!parent || parent.deleted_at) throw bad('父任务不存在', 'INVALID_PARENT');
+    if (parent.parent_id) throw bad('子待办下不能再挂子待办', 'NEST_TOO_DEEP');
+    if (input.recurrence) throw bad('子待办不支持每月例行', 'INVALID_PARENT');
+    parentId = parent.id;
+  }
 
   // 每月例行：先建系列、铺未来若干期，再把第一期当作这次创建的返回值
   if (input.recurrence) {
@@ -293,7 +351,7 @@ export function createTask(db, raw = {}) {
     return {
       task,
       links: owner.firstTaskId ? listLinks(db, owner.firstTaskId) : [],
-      linkError: null,
+      linkError: owner.linkError || null,
       series: owner.series,
       seriesOccurrences: owner.occurrences,
     };
@@ -303,8 +361,8 @@ export function createTask(db, raw = {}) {
   const now = nowIso();
   db.prepare(
     `INSERT INTO task (id, title, notes_md, category_id, status, priority, due_on, due_time,
-       estimate_min, created_at, updated_at, last_touched_at, rev, sort_order)
-     VALUES (?,?,?,?,'open',?,?,?,?,?,?,?,1,0)`
+       estimate_min, created_at, updated_at, last_touched_at, rev, sort_order, parent_id, remind_at)
+     VALUES (?,?,?,?,'open',?,?,?,?,?,?,?,1,0,?,?)`
   ).run(
     id,
     title,
@@ -316,7 +374,9 @@ export function createTask(db, raw = {}) {
     normalized.estimateMin,
     now,
     now,
-    now
+    now,
+    parentId,
+    normalized.remindAt
   );
   if (input.tags) setTaskTags(db, id, input.tags);
   let linkError = null;
@@ -370,6 +430,13 @@ export function patchTask(db, id, rawPatch = {}, rev) {
     push('estimate_min', patch.estimateMin === null ? null : Math.max(1, Number(patch.estimateMin)));
   if (patch.doneNote !== undefined) push('done_note', clampStr(String(patch.doneNote ?? ''), 2000));
   if (patch.sortOrder !== undefined) push('sort_order', Number(patch.sortOrder) || 0);
+  if (patch.pinned !== undefined) push('pinned', patch.pinned ? 1 : 0);
+  if (patch.remindAt !== undefined) {
+    const next = normRemind(patch.remindAt);
+    push('remind_at', next);
+    // 改了提醒时间就重新武装：否则 remind_fired 还停在 1，新时间永远不会响
+    if (next !== row.remind_at) push('remind_fired', 0);
+  }
 
   if (sets.length) {
     const now = nowIso();
@@ -394,6 +461,22 @@ export function completeTask(db, id) {
     "UPDATE task SET status = 'done', completed_at = ?, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?"
   ).run(now, now, now, id);
   logEvent(db, id, 'completed', { from: row.status });
+
+  // 子待办单向级联：勾父带子（未完成的子项一并完成）；子项完成不回写父，
+  // 父行的进度靠 child_done/child_count 显示。
+  if (!row.parent_id) {
+    const kids = db
+      .prepare(
+        "SELECT id FROM task WHERE parent_id = ? AND deleted_at IS NULL AND status IN ('open','doing')"
+      )
+      .all(id);
+    for (const kid of kids) {
+      db.prepare(
+        "UPDATE task SET status = 'done', completed_at = ?, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?"
+      ).run(now, now, now, kid.id);
+      logEvent(db, kid.id, 'completed', { cascade: 'parent' });
+    }
+  }
   return getTask(db, id);
 }
 
@@ -403,11 +486,67 @@ export function reopenTask(db, id) {
   // 例行系列被「取消未来」标成 dropped 的期，也能单独恢复成待办
   if (row.status === 'open' || row.status === 'doing') return { task: getTask(db, id), previousArchive: null };
   const now = nowIso();
+  // 每日/每周的历史行恢复后就是一条普通待办：留着 series_id 会变成该系列的第二条活行，
+  // 和正在滚的那条抢「下一期」。撤销完成也不回滚滚动进度，所以直接断开关系。
+  let detach = false;
+  if (row.series_id) {
+    const s = db.prepare('SELECT rule FROM task_series WHERE id = ?').get(row.series_id);
+    detach = Boolean(s && s.rule !== 'monthly');
+  }
+  const extra = detach ? ', series_id = NULL, occur_month = NULL' : '';
   db.prepare(
-    "UPDATE task SET status = 'open', completed_at = NULL, dropped_at = NULL, archived_path = NULL, archive_error = NULL, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?"
+    `UPDATE task SET status = 'open', completed_at = NULL, dropped_at = NULL, archived_path = NULL, archive_error = NULL${extra}, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?`
   ).run(now, now, id);
-  logEvent(db, id, 'reopened', { from: row.status });
+  logEvent(db, id, 'reopened', { from: row.status, detached: detach });
   return { task: getTask(db, id), previousArchive: row.archived_path };
+}
+
+/* ------------------------------- 提醒 ------------------------------- */
+
+function localMinute(ms) {
+  const d = new Date(ms);
+  return `${localDate(d)}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function parseLocalMinute(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(s || ''));
+  if (!m) return NaN;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), 0, 0).getTime();
+}
+
+/**
+ * 抢占到期提醒：只有把 remind_fired 从 0 改成 1 的那一次调用才有资格发通知，
+ * 页面内轮询和托盘轮询同时打进来也不会重复提醒。
+ * 迟到超过 graceMin 的只标记、不补发——隔了一晚上的闹钟没有意义。
+ */
+export function claimDueReminders(db, opts = {}) {
+  const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
+  const graceMin = Number.isFinite(opts.graceMin) ? opts.graceMin : 15;
+  const nowMin = localMinute(nowMs);
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.title, t.priority, t.due_on, t.due_time, t.remind_at, c.name AS category_name
+         FROM task t LEFT JOIN category c ON c.id = t.category_id
+        WHERE t.deleted_at IS NULL AND t.remind_at IS NOT NULL AND t.remind_fired = 0
+          AND t.remind_at <= ? AND t.status IN ('open','doing')
+        ORDER BY t.remind_at ASC
+        LIMIT 50`
+    )
+    .all(nowMin);
+  if (!rows.length) return [];
+  const claim = db.prepare('UPDATE task SET remind_fired = 1, updated_at = ? WHERE id = ? AND remind_fired = 0');
+  const updatedAt = nowIso(new Date(nowMs));
+  const claimed = [];
+  for (const row of rows) {
+    const atMs = parseLocalMinute(row.remind_at);
+    // 先抢占再判断迟到：抢不到说明别的通道已经发过，直接跳过
+    const r = claim.run(updatedAt, row.id);
+    if ((r.changes ?? 0) !== 1) continue;
+    const lateMin = Number.isFinite(atMs) ? Math.floor((nowMs - atMs) / 60000) : 0;
+    if (lateMin > graceMin) continue;
+    claimed.push({ ...row, late_min: Math.max(0, lateMin) });
+  }
+  return claimed;
 }
 
 export function setArchivedPath(db, id, relPath, error = null) {
@@ -418,17 +557,29 @@ export function setArchivedPath(db, id, relPath, error = null) {
 export function softDelete(db, id) {
   const row = db.prepare('SELECT * FROM task WHERE id = ? AND deleted_at IS NULL').get(id);
   if (!row) throw notFound('任务不存在');
-  db.prepare('UPDATE task SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?').run(
-    nowIso(),
-    nowIso(),
-    id
-  );
+  const stamp = nowIso();
+  db.prepare('UPDATE task SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?').run(stamp, stamp, id);
   logEvent(db, id, 'deleted', { title: row.title });
+  // 删父连带软删子项（同一个时间戳，恢复时按它配对找回），否则子项会变成看不见的孤儿
+  if (!row.parent_id) {
+    db.prepare(
+      'UPDATE task SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE parent_id = ? AND deleted_at IS NULL'
+    ).run(stamp, stamp, id);
+  }
   return row;
 }
 
 export function restoreTask(db, id) {
-  db.prepare('UPDATE task SET deleted_at = NULL, updated_at = ?, rev = rev + 1 WHERE id = ?').run(nowIso(), id);
+  const row = db.prepare('SELECT * FROM task WHERE id = ?').get(id);
+  if (!row) throw notFound('任务不存在');
+  const stamp = nowIso();
+  db.prepare('UPDATE task SET deleted_at = NULL, updated_at = ?, rev = rev + 1 WHERE id = ?').run(stamp, id);
+  // 恢复父任务时，把跟着一起删下去的子项按同一时间戳找回；先前单独删掉的子项不跟着复活
+  if (!row.parent_id && row.deleted_at) {
+    db.prepare(
+      'UPDATE task SET deleted_at = NULL, updated_at = ?, rev = rev + 1 WHERE parent_id = ? AND deleted_at = ?'
+    ).run(stamp, id, row.deleted_at);
+  }
   logEvent(db, id, 'restored', {});
   return getTask(db, id);
 }
@@ -436,6 +587,7 @@ export function restoreTask(db, id) {
 export function purgeTask(db, id) {
   const row = db.prepare('SELECT * FROM task WHERE id = ?').get(id);
   if (!row) throw notFound('任务不存在');
+  db.prepare('DELETE FROM task WHERE parent_id = ?').run(id);
   db.prepare('DELETE FROM task WHERE id = ?').run(id);
   pruneEmptyTags(db);
   return row;
@@ -549,30 +701,104 @@ export function primaryLink(db, taskId) {
     .get(taskId) || db.prepare('SELECT * FROM task_link WHERE task_id = ? LIMIT 1').get(taskId);
 }
 
+/* --------------------------- 手动排序 / 导出 --------------------------- */
+
+/**
+ * 组内拖拽排序：ids 是拖完之后的最终顺序，sort_order 按倒序写入，
+ * 因为列表 ORDER BY 用的是 sort_order DESC（0 = 没排过，靠默认口径）。
+ * 只允许排一级任务；子待办的顺序在父任务里另说，不进这个接口。
+ */
+export function reorderTasks(db, ids) {
+  if (!Array.isArray(ids) || !ids.length) throw bad('ids 需要是非空数组', 'BAD_ORDER');
+  if (ids.length > 500) throw bad('一次最多重排 500 条', 'BAD_ORDER');
+  const seen = new Set();
+  for (const id of ids) {
+    const s = String(id || '');
+    if (!s || seen.has(s)) throw bad('ids 里有空值或重复项', 'BAD_ORDER');
+    seen.add(s);
+  }
+  const list = [...seen];
+  const found = db
+    .prepare(
+      `SELECT id FROM task WHERE deleted_at IS NULL AND parent_id IS NULL AND id IN (${list.map(() => '?').join(',')})`
+    )
+    .all(...list);
+  if (found.length !== list.length) throw bad('有任务不存在或已被删除', 'BAD_ORDER');
+  const now = nowIso();
+  const stmt = db.prepare('UPDATE task SET sort_order = ?, updated_at = ?, last_touched_at = ? WHERE id = ?');
+  list.forEach((id, i) => stmt.run(list.length - i, now, now, id));
+  return list.length;
+}
+
+/**
+ * 导出当前筛选：和列表同一个 listTasks，参数原样转发，
+ * 所以页面上看到什么，导出的 Markdown 就是什么。
+ */
+export function exportMarkdown(db, opts = {}) {
+  const rows = listTasks(db, { ...opts, limit: Math.min(Number(opts.limit) || 1000, 1000) });
+  const today = localDate();
+  const lines = [`# 待办清单 · ${today}`, '', `按当前筛选导出，共 ${rows.length} 条未完成。`, ''];
+  const groups = new Map();
+  for (const r of rows) {
+    const key = r.category_name || '未分类';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  for (const [cat, items] of groups) {
+    lines.push(`## ${cat}（${items.length}）`, '');
+    for (const t of items) {
+      const bits = [`- [ ] ${t.title}`, `· ${PRIORITY_SHORT[t.priority] ?? 'P2'}`];
+      if (t.pinned) bits.push('· 📌 置顶');
+      if (t.due_on) bits.push(`· 到期 ${t.due_on}${t.due_time ? ' ' + t.due_time : ''}`);
+      if (t.remind_at) bits.push(`· 提醒 ${String(t.remind_at).replace('T', ' ')}`);
+      if (t.tag_names) bits.push(`· #${String(t.tag_names).split(' ').join(' #')}`);
+      if (t.child_count) bits.push(`· 子项 ${t.child_done || 0}/${t.child_count}`);
+      lines.push(bits.join(' '));
+    }
+    lines.push('');
+  }
+  if (!rows.length) lines.push('（当前筛选下没有未完成待办）', '');
+  lines.push('---', `> 由待办工作台导出 · ${nowIso()}`);
+  return lines.join('\n') + '\n';
+}
+
 /* ------------------------------- 统计 ------------------------------- */
 
 export function stats(db) {
   const today = localDate();
-  const openCount = db.prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL").get();
+  // 统计口径一律只看一级任务：子待办跟着父任务完成，算进来会让「今天完成 N 件」虚高
+  const openCount = db
+    .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL")
+    .get();
   const overdue = db
-    .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND due_on IS NOT NULL AND due_on < ?")
+    .prepare(
+      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
+    )
     .get(today);
   const dueToday = db
-    .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND due_on = ?")
+    .prepare(
+      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
+    )
     .get(today);
-  const doneTotal = db.prepare("SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL").get();
+  const doneTotal = db
+    .prepare("SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL AND parent_id IS NULL")
+    .get();
   const doneThisMonth = db
-    .prepare("SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL AND substr(completed_at,1,7) = ?")
+    .prepare(
+      "SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL AND parent_id IS NULL AND substr(completed_at,1,7) = ?"
+    )
     .get(today.slice(0, 7));
   const yesterday = db
-    .prepare("SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL AND substr(completed_at,1,10) = ?")
+    .prepare(
+      "SELECT count(*) AS n FROM task WHERE status = 'done' AND deleted_at IS NULL AND parent_id IS NULL AND substr(completed_at,1,10) = ?"
+    )
     .get(addDays(today, -1));
 
   const months = db
     .prepare(
       `SELECT substr(completed_at,1,7) AS ym, count(*) AS done_count,
               round(avg(julianday(completed_at) - julianday(created_at)), 1) AS avg_cycle_days
-       FROM task WHERE status='done' AND deleted_at IS NULL AND completed_at IS NOT NULL
+       FROM task WHERE status='done' AND deleted_at IS NULL AND parent_id IS NULL AND completed_at IS NOT NULL
        GROUP BY ym ORDER BY ym DESC LIMIT 12`
     )
     .all()
@@ -583,7 +809,7 @@ export function stats(db) {
     .prepare(
       `SELECT coalesce(c.name,'未分类') AS name, coalesce(c.color,'') AS color, count(*) AS n
        FROM task t LEFT JOIN category c ON c.id = t.category_id
-       WHERE t.status IN ('open','doing') AND t.deleted_at IS NULL
+       WHERE t.status IN ('open','doing') AND t.deleted_at IS NULL AND t.parent_id IS NULL
        GROUP BY c.id ORDER BY n DESC LIMIT 8`
     )
     .all();
@@ -591,11 +817,15 @@ export function stats(db) {
   const byPriority = db
     .prepare(
       `SELECT priority, count(*) AS n FROM task
-       WHERE status IN ('open','doing') AND deleted_at IS NULL GROUP BY priority ORDER BY priority`
+       WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL GROUP BY priority ORDER BY priority`
     )
     .all();
 
-  const recentDone = db.prepare(`${ROW_SELECT} WHERE t.status='done' AND t.deleted_at IS NULL ORDER BY t.completed_at DESC LIMIT 8`).all();
+  const recentDone = db
+    .prepare(
+      `${ROW_SELECT} WHERE t.status='done' AND t.deleted_at IS NULL AND t.parent_id IS NULL ORDER BY t.completed_at DESC LIMIT 8`
+    )
+    .all();
 
   return {
     today,

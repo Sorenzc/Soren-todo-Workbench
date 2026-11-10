@@ -106,6 +106,8 @@ const state = {
   // day 视图看什么：due=这天到期的未完成，done=这天完成的
   dayMode: 'due',
   cal: { open: false, ym: null, days: {}, doneDays: {}, overdue: 0, loaded: false },
+  // 日历视图（和上面那个纯计数的月历浮层是两回事：这里要放条目、能拖改期）
+  cv: { mode: 'month', anchor: null, from: '', to: '', days: {}, doneDays: {}, items: {}, overdue: 0 },
   filter: { q: '', cat: null, tag: null, sort: 'score' },
   selectedId: null,
   detail: null,
@@ -171,7 +173,7 @@ function closePalette() {
 function paletteCommands() {
   return [
     { kind: '命令', text: '新建待办（完整表单）', run: () => { closePalette(); openNewTaskModal(); } },
-    { kind: '命令', text: '新建每月例行', run: () => { closePalette(); openNewTaskModal({ recurring: true }); } },
+    { kind: '命令', text: '新建例行待办', run: () => { closePalette(); openNewTaskModal({ recurring: true }); } },
     { kind: '命令', text: '联系作者（扫码反馈）', run: () => { closePalette(); openContactModal(); } },
     { kind: '命令', text: '激励作者（支付宝扫码）', run: () => { closePalette(); openRewardModal(); } },
     { kind: '命令', text: '新建分类', run: () => { closePalette(); openCategoryModal(); } },
@@ -303,6 +305,170 @@ async function loadStats() {
   state.stats = await api.get('/api/stats');
 }
 
+/* --------------------------- 日历视图（月/周） --------------------------- */
+/** 当前档位要看的日期区间：月=6×7 的整格窗口，周=周一至周日 */
+function calViewRange(mode, anchor) {
+  if (mode === 'week') {
+    const d = parseDate(anchor);
+    const dow = (d.getDay() + 6) % 7; // 周一=0
+    const from = localDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow));
+    return { from, to: addDays(from, 6) };
+  }
+  const { start, end } = gridRange(monthOf(anchor));
+  return { from: start, to: end };
+}
+
+async function loadCalendarView() {
+  const anchor = state.cv.anchor || todayStr();
+  state.cv.anchor = anchor;
+  const { from, to } = calViewRange(state.cv.mode, anchor);
+  const r = await api.get(`/api/calendar?from=${from}&to=${to}`);
+  state.cv.from = from;
+  state.cv.to = to;
+  state.cv.days = r.days || {};
+  state.cv.doneDays = r.done_days || {};
+  state.cv.items = r.items || {};
+  state.cv.overdue = Number(r.overdue || 0);
+}
+
+/** 拖 chip 改期：只改 due_on，其余字段（提醒、子项、标签）都不动 */
+async function moveTaskTo(id, date) {
+  try {
+    const cur = state.cv.items?.[date] || [];
+    if (cur.some((t) => t.id === id)) return;
+    await api.patch(`/api/tasks/${id}`, { patch: { dueOn: date } });
+    await refresh();
+    toast(`已挪到 ${mdLabel(date)}`, { ms: 4000 });
+  } catch (err) {
+    showErr(err);
+  }
+}
+
+function calChip(t) {
+  // 虚拟条目：每日/每周周期里还没到期的那几期，点了只解释一下，不能拖改期
+  const virt = Boolean(t.virtual);
+  const chip = el('button', {
+    class: `cv-chip${t.priority <= 1 ? ' p' + t.priority : ''}${t.due_time ? ' timed' : ''}${virt ? ' virt' : ''}`,
+    title: virt
+      ? `${t.title} · 周期里的未来一期（${t.rule === 'weekly' ? '每周' : '每天'}重复）`
+      : [t.title, t.category_name, t.due_time, t.child_count ? `子项 ${t.child_done || 0}/${t.child_count}` : '']
+        .filter(Boolean).join(' · '),
+    style: { '--c': t.category_color || null },
+    draggable: virt ? undefined : 'true',
+    onclick: (e) => {
+      e.stopPropagation();
+      if (virt) { toast(`「${t.title}」是周期里的未来一期，上一期完成时它会自动变成待办`); return; }
+      selectTask(t.id);
+    },
+  },
+    el('span', { class: 'cv-chip-dot', style: { '--c': t.category_color || 'var(--text-3)' } }),
+    el('span', { class: 'cv-chip-t', text: t.title }),
+    t.due_time ? el('span', { class: 'cv-chip-time', text: t.due_time }) : null
+  );
+  if (virt) return chip;
+  chip.addEventListener('dragstart', (e) => {
+    try {
+      e.dataTransfer.setData('application/x-wb-task', t.id);
+      e.dataTransfer.effectAllowed = 'move';
+    } catch { /* 老浏览器不支持自定义类型时靠 drop 的兜底 */ }
+    chip.classList.add('dragging');
+    dragTaskId = t.id;
+  });
+  chip.addEventListener('dragend', () => {
+    chip.classList.remove('dragging');
+    dragTaskId = null;
+  });
+  return chip;
+}
+
+let dragTaskId = null;
+
+function calCell(date, opts = {}) {
+  const items = state.cv.items?.[date] || [];
+  const nDone = state.cv.doneDays?.[date] || 0;
+  const isToday = date === todayStr();
+  const cell = el('div', {
+    class: `cv-day${opts.other ? ' other' : ''}${isToday ? ' today' : ''}${date < todayStr() && items.length ? ' late' : ''}`,
+    dataset: { date },
+    title: `${date}${items.length ? ` · ${items.length} 条待办` : ''}${nDone ? ` · 完成 ${nDone}` : ''}`,
+    onclick: () => setDay(date),
+  },
+    el('div', { class: 'cv-day-head' },
+      el('span', { class: 'cv-day-num', text: String(Number(date.slice(8, 10))) }),
+      nDone ? el('span', { class: 'cv-day-done', text: `✓${nDone}` }) : null
+    )
+  );
+  if (opts.mode === 'week') {
+    const wrap = el('div', { class: 'cv-week-list' });
+    for (const t of items) wrap.append(calChip(t));
+    if (!items.length) wrap.append(el('div', { class: 'cv-empty', text: '—' }));
+    cell.append(wrap);
+  } else {
+    const show = items.slice(0, 3);
+    for (const t of show) cell.append(calChip(t));
+    if (items.length > show.length) cell.append(el('div', { class: 'cv-more', text: `还有 ${items.length - show.length} 条` }));
+  }
+  cell.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    cell.classList.add('drop');
+  });
+  cell.addEventListener('dragleave', () => cell.classList.remove('drop'));
+  cell.addEventListener('drop', (e) => {
+    e.preventDefault();
+    cell.classList.remove('drop');
+    let id = '';
+    try { id = e.dataTransfer.getData('application/x-wb-task'); } catch { /* 忽略 */ }
+    id = id || dragTaskId;
+    if (id) moveTaskTo(id, date);
+  });
+  return cell;
+}
+
+function renderCalendarView() {
+  const list = $('#list');
+  list.innerHTML = '';
+  const cv = state.cv;
+  const mode = cv.mode;
+  const from = cv.from;
+  const to = cv.to;
+  if (!from || !to) return;
+  const wrap = el('div', { class: `calview ${mode}` });
+
+  // 星期表头（周视图里顺带显示每列的日期）
+  const head = el('div', { class: 'cv-head' });
+  const WD = ['一', '二', '三', '四', '五', '六', '日'];
+  if (mode === 'week') {
+    const d0 = parseDate(from);
+    WD.forEach((w, i) => {
+      const d = localDate(new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + i));
+      head.append(el('div', { class: `cv-head-cell${d === todayStr() ? ' today' : ''}` },
+        el('span', { text: `周${w}` }),
+        el('span', { class: 'cv-head-date', text: d.slice(5) })
+      ));
+    });
+  } else {
+    WD.forEach((w) => head.append(el('div', { class: 'cv-head-cell', text: `周${w}` })));
+  }
+  wrap.append(head);
+
+  const grid = el('div', { class: `cv-grid ${mode}` });
+  const days = [];
+  let cur = from;
+  while (cur <= to) { days.push(cur); cur = addDays(cur, 1); }
+  const monthPrefix = monthOf(cv.anchor || todayStr());
+  for (const d of days) {
+    grid.append(calCell(d, { mode, other: mode === 'month' && monthOf(d) !== monthPrefix }));
+  }
+  wrap.append(grid);
+  if (cv.overdue) {
+    wrap.append(el('div', { class: 'cv-foot' },
+      el('span', { class: 'cv-foot-warn', text: `另有 ${cv.overdue} 条逾期未排进来` }),
+      el('button', { class: 'btn small ghost', text: '去今天视图处理', onclick: () => setView('today') })
+    ));
+  }
+  list.append(wrap);
+}
+
 async function refresh() {
   try {
     await loadBootstrap();
@@ -316,6 +482,7 @@ async function refresh() {
     else if (state.view === 'done') await loadDone();
     else if (state.view === 'archive') await loadArchive();
     else if (state.view === 'stats') { await loadTasks(); await loadStats(); }
+    else if (state.view === 'calendar') await loadCalendarView();
     if (state.cal.open) await loadCalendarMonth(state.cal.ym);
     renderAll();
   } catch (err) {
@@ -328,10 +495,12 @@ const VIEWS = [
   { id: 'focus', label: '聚焦', icon: '◎' },
   { id: 'today', label: '今天', icon: '◉' },
   { id: 'all', label: '全部待办', icon: '≡' },
-  { id: 'series', label: '例行', icon: '↻' },
+  { id: 'series', label: '例行待办', icon: '↻' },
   { id: 'done', label: '已完成', icon: '✓' },
   { id: 'archive', label: '归档', icon: '▤' },
   { id: 'stats', label: '统计', icon: '▦' },
+  // 追加在最后：e2e 用 #navViews button:nth-child(4) 点「每月例行」，别插到前面去
+  { id: 'calendar', label: '日历', icon: '⊞' },
 ];
 
 function renderNav() {
@@ -459,7 +628,21 @@ function taskRow(t, opts = {}) {
     isDone
       ? el('button', { class: 'tick', title: '重新打开', text: '✓', onclick: () => reopenTask(t) })
       : el('button', { class: 'tick', title: '标记完成', text: '✓', onclick: () => completeTask(t) }),
-    el('span', { class: 'row-title' }, t.title, t.series_id ? el('span', { class: 'row-recur', title: '每月例行', text: '↻' }) : null),
+    el('span', { class: 'row-title' },
+      el('span', { class: 'rt-text', text: t.title }),
+      el('span', { class: 'row-badges' },
+        t.series_id ? el('span', { class: 'row-recur', title: '例行待办', text: '↻' }) : null,
+        t.child_count
+          ? el('span', {
+              class: 'row-child',
+              title: `子待办 ${t.child_done || 0}/${t.child_count} 已完成`,
+              text: `${t.child_done || 0}/${t.child_count}`,
+            })
+          : null,
+        t.remind_at ? el('span', { class: 'row-remind', title: `提醒：${t.remind_at.replace('T', ' ')}`, text: '⏰' }) : null,
+        t.pinned ? el('span', { class: 'row-pin', title: '置顶', text: '📌' }) : null
+      )
+    ),
     t.category_name
       ? el('span', { class: 'row-cat', style: { '--c': t.category_color || 'var(--text-3)' } },
           el('span', { class: 'd' }), t.category_name)
@@ -468,6 +651,12 @@ function taskRow(t, opts = {}) {
     el('span', { class: `row-due ${isDone ? 'done-time' : urgency}`, text: dueText }),
     folder || el('span'),
     el('div', { class: 'row-actions' },
+      el('button', {
+        class: `pin${t.pinned ? ' on' : ''}`,
+        title: t.pinned ? '取消置顶' : '置顶（永远排最前）',
+        text: '📌',
+        onclick: () => togglePin(t),
+      }),
       el('button', { title: '打开详情', text: '✎', onclick: () => selectTask(t.id) }),
       el('button', { title: isDone ? '重新打开' : '完成', text: isDone ? '↺' : '✓', onclick: () => (isDone ? reopenTask(t) : completeTask(t)) }),
       el('button', { class: 'danger', title: '删除', text: '🗑', onclick: () => deleteTask(t) })
@@ -501,10 +690,17 @@ function renderFocus() {
   }
   const must = f.must || [];
   const week = f.week || [];
+  const pinned = items.filter((t) => t.pinned);
+  const pinnedIds = new Set(pinned.map((t) => t.id));
   const mustIds = new Set(must.map((t) => t.id));
   const weekIds = new Set(week.map((t) => t.id));
-  const pool = items.filter((t) => !mustIds.has(t.id) && !weekIds.has(t.id));
+  const pool = items.filter((t) => !pinnedIds.has(t.id) && !mustIds.has(t.id) && !weekIds.has(t.id));
 
+  // 置顶永远在最前：范围档、排序都压不住它，这是置顶的全部意义
+  if (pinned.length) {
+    list.append(groupHead('置顶', pinned.length, 'pin', '不参与到期排序'));
+    list.append(rowCard(pinned));
+  }
   if (must.length) {
     // 「即将逾期」比「必做」更好懂：这里放的就是逾期 + 快到期 + 久未处理的硬骨头
     const breakdown = [
@@ -513,11 +709,11 @@ function renderFocus() {
     ].filter(Boolean).join(' · ');
     const hint = breakdown || '拖了很久的 P0/P1';
     list.append(groupHead('即将逾期', must.length, f.overdue_count ? 'overdue' : '', hint));
-    list.append(rowCard(must));
+    list.append(rowCard(must.filter((t) => !pinnedIds.has(t.id))));
   }
   if (week.length) {
     list.append(groupHead('本周', week.length, '', '7 天内到期'));
-    list.append(rowCard(week));
+    list.append(rowCard(week.filter((t) => !pinnedIds.has(t.id))));
   }
   const poolShow = pool.slice(0, 60);
   if (poolShow.length) {
@@ -539,7 +735,13 @@ function renderToday() {
     return;
   }
   if (overdue.length) {
-    list.append(groupHead('逾期', overdue.length, 'overdue', '补完就清掉'));
+    const head = groupHead('逾期', overdue.length, 'overdue', '');
+    head.append(el('button', {
+      class: 'btn small ghost', style: { marginLeft: 'auto' },
+      text: `一键完成 ${overdue.length} 条`,
+      onclick: () => completeOverdue(overdue),
+    }));
+    list.append(head);
     list.append(rowCard(overdue));
   }
   if (today.length) {
@@ -548,7 +750,62 @@ function renderToday() {
   }
 }
 
+/**
+ * 逾期批量完成：逐条走 /complete，中间失败不中断，结尾报 ok/total。
+ * 确认文案只在真会发生的时候提一句（每月例行会滚下一期、父任务会带上子项），
+ * 不为不存在的副作用吓人。
+ */
+async function completeOverdue(items) {
+  const list = [...items];
+  if (!list.length) return;
+  const recur = list.filter((t) => t.series_id).length;
+  const withKids = list.filter((t) => (t.child_count || 0) > 0).length;
+  const extra = [];
+  if (recur) extra.push(`${recur} 条是例行待办，只完成这一期，系列照常排下一期`);
+  if (withKids) extra.push(`${withKids} 条带子待办，未完成的子项会一并勾上`);
+  const sure = window.confirm(
+    `完成这 ${list.length} 条逾期待办？${extra.length ? '\n\n' + extra.join('；') + '。' : ''}`
+  );
+  if (!sure) return;
+  let ok = 0;
+  const fails = [];
+  for (const t of list) {
+    try {
+      await api.post(`/api/tasks/${t.id}/complete`, {});
+      ok += 1;
+    } catch (err) {
+      fails.push(`${t.title}：${err?.message || '失败'}`);
+    }
+  }
+  await refresh();
+  toast(`已完成 ${ok}/${list.length} 条逾期待办${fails.length ? `，${fails.length} 条失败（${fails[0]}）` : ''}`, { ms: 7000 });
+}
+
 const SORT_LABEL = { score: '智能', due: '到期时间', priority: '优先级', created: '创建时间' };
+
+/**
+ * 七段分组：置顶 → 逾期 → 今天 → 本周 → 本月 → 以后 → 无日期。
+ * 置顶排最前、且不受「范围」影响——这是置顶唯一的意义，不能又被日期压下去。
+ */
+function bucketOfTask(t, today = todayStr()) {
+  if (t.pinned) return 'pinned';
+  if (!t.due_on) return 'nodate';
+  const dl = daysLeft(t.due_on);
+  if (dl < 0) return 'overdue';
+  if (dl === 0) return 'today';
+  if (dl <= 7) return 'week';
+  if (monthOf(t.due_on) === monthOf(today)) return 'month';
+  return 'later';
+}
+const BUCKETS = [
+  ['pinned', '置顶', 'pin'],
+  ['overdue', '逾期', 'overdue'],
+  ['today', '今天', 'today'],
+  ['week', '本周', ''],
+  ['month', '本月', ''],
+  ['later', '以后', ''],
+  ['nodate', '无日期', ''],
+];
 
 function renderAllList() {
   const list = $('#list');
@@ -569,9 +826,85 @@ function renderAllList() {
     showEmpty('这里还没有待办', '用顶部输入框添加第一条：写标题即可，还能带 #分类 !P0 @明天。');
     return;
   }
-  const flag = state.filter.q ? `搜索「${state.filter.q}」` : `按${SORT_LABEL[state.filter.sort] || '智能'}排序`;
-  list.append(groupHead('待办', items.length, '', flag));
-  list.append(rowCard(items));
+  const buckets = new Map();
+  for (const t of items) {
+    const k = bucketOfTask(t);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(t);
+  }
+  const flag = state.filter.q ? `搜索「${state.filter.q}」` : `按${SORT_LABEL[state.filter.sort] || '智能'}排序 · 可拖动排序`;
+  for (const [key, label, cls] of BUCKETS) {
+    const group = buckets.get(key) || [];
+    if (!group.length) continue;
+    list.append(groupHead(label, group.length, cls, key === 'pinned' ? '永远排最前' : key === 'overdue' ? '拖了很久' : ''));
+    const card = rowCard(group);
+    list.append(card);
+    enableRowDrag(card);
+  }
+  // 分组说明放在最后一行，不跟第一个分组头抢注意力
+  list.append(el('div', { class: 'list-foot', text: flag }));
+}
+
+/* 组内拖拽排序：只调顺序，不改分组（拖不回「无日期」里去） */
+let rowDragId = null;
+function enableRowDrag(card) {
+  const rows = [...card.querySelectorAll('.row')];
+  if (rows.length < 2) return;
+  for (const row of rows) {
+    row.draggable = true;
+    row.addEventListener('dragstart', (e) => {
+      rowDragId = row.dataset.id;
+      row.classList.add('dragging');
+      try {
+        e.dataTransfer.setData('text/plain', rowDragId);
+        e.dataTransfer.effectAllowed = 'move';
+      } catch { /* 忽略 */ }
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      rowDragId = null;
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      row.classList.add('drop-near');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-near'));
+    row.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      row.classList.remove('drop-near');
+      let from = '';
+      try { from = e.dataTransfer.getData('text/plain'); } catch { /* 忽略 */ }
+      from = from || rowDragId;
+      const to = row.dataset.id;
+      if (!from || !to || from === to) return;
+      const order = [...card.querySelectorAll('.row')].map((n) => n.dataset.id);
+      const fi = order.indexOf(from);
+      const ti = order.indexOf(to);
+      if (fi < 0 || ti < 0) return;
+      order.splice(fi, 1);
+      order.splice(ti, 0, from);
+      await saveOrder(order);
+    });
+  }
+}
+
+async function saveOrder(ids) {
+  try {
+    await api.post('/api/tasks/reorder', { ids });
+    await refresh();
+  } catch (err) {
+    showErr(err);
+  }
+}
+
+async function togglePin(t) {
+  try {
+    await api.patch(`/api/tasks/${t.id}`, { patch: { pinned: !t.pinned } });
+    await refresh();
+    toast(t.pinned ? '已取消置顶' : '已置顶，会一直排在列表最前');
+  } catch (err) {
+    showErr(err);
+  }
 }
 
 function renderDone() {
@@ -767,7 +1100,7 @@ function renderViewHead() {
   tools.innerHTML = '';
   $('#empty').hidden = true;
   // 唯一的「添加」入口：归档/统计/例行/某天已完成这些不该新建的视图，隐藏它
-  const canAdd = !['archive', 'stats', 'series'].includes(state.view) && !isDoneDay();
+  const canAdd = !['archive', 'stats', 'series', 'calendar'].includes(state.view) && !isDoneDay();
   $('#qaAdd').hidden = !canAdd;
   const f = state.focus;
   if (state.view === 'focus') {
@@ -792,7 +1125,8 @@ function renderViewHead() {
     tools.append(
       el('button', { class: 'tool-btn', text: '‹ 前一天', title: '前一天（←）', onclick: () => setDay(addDays(state.day, -1), state.dayMode) }),
       el('button', { class: 'tool-btn', text: '今天', onclick: () => setDay(todayStr(), state.dayMode) }),
-      el('button', { class: 'tool-btn', text: '后一天 ›', title: '后一天（→）', onclick: () => setDay(addDays(state.day, 1), state.dayMode) })
+      el('button', { class: 'tool-btn', text: '后一天 ›', title: '后一天（→）', onclick: () => setDay(addDays(state.day, 1), state.dayMode) }),
+      el('button', { class: 'tool-btn', text: '导出', title: '导出这天的清单', onclick: exportCurrent })
     );
   } else if (state.view === 'all') {
     t.textContent = state.filter.cat ? state.bootstrap.categories.find((c) => c.id === state.filter.cat)?.name || '待办' : '全部待办';
@@ -806,6 +1140,7 @@ function renderViewHead() {
     if (state.filter.cat || state.filter.tag || state.filter.q) {
       tools.append(el('button', { class: 'tool-btn', text: '清除筛选', onclick: () => { state.filter = { q: '', cat: null, tag: null, sort: state.filter.sort }; refresh(); } }));
     }
+    tools.append(el('button', { class: 'tool-btn', text: '导出', title: '把当前筛选导出成 Markdown', onclick: exportCurrent }));
   } else if (state.view === 'done') {
     t.textContent = '已完成';
     sub.textContent = `共 ${state.done.length} 条，按完成时间倒序`;
@@ -816,12 +1151,42 @@ function renderViewHead() {
   } else if (state.view === 'stats') {
     t.textContent = '统计';
     sub.textContent = '完成节奏与分布';
+  } else if (state.view === 'calendar') {
+    const cv = state.cv;
+    const byMonth = cv.mode === 'month';
+    const anchor = cv.anchor || todayStr();
+    const label = byMonth
+      ? `${anchor.slice(0, 4)} 年 ${Number(anchor.slice(5, 7))} 月`
+      : `${mdLabel(cv.from)} – ${mdLabel(cv.to)}`;
+    t.textContent = '日历';
+    sub.textContent = `${label} · 点格子看当天，拖条目改期`;
+    tools.append(el('div', { class: 'seg' },
+      el('button', { class: byMonth ? 'active' : '', text: '月', title: '整月格子', onclick: () => { state.cv.mode = 'month'; refresh(); } }),
+      el('button', { class: byMonth ? '' : 'active', text: '周', title: '一周细看', onclick: () => { state.cv.mode = 'week'; refresh(); } })
+    ));
+    tools.append(
+      el('button', {
+        class: 'tool-btn', text: '‹', title: '上一段',
+        onclick: () => {
+          state.cv.anchor = byMonth ? `${addMonths(String(anchor).slice(0, 7), -1)}-01` : addDays(anchor, -7);
+          refresh();
+        },
+      }),
+      el('button', { class: 'tool-btn', text: '今天', onclick: () => { state.cv.anchor = todayStr(); refresh(); } }),
+      el('button', {
+        class: 'tool-btn', text: '›', title: '下一段',
+        onclick: () => {
+          state.cv.anchor = byMonth ? `${addMonths(String(anchor).slice(0, 7), 1)}-01` : addDays(anchor, 7);
+          refresh();
+        },
+      })
+    );
   } else if (state.view === 'series') {
     const alive = (state.series || []).filter((s) => s.status === 'active').length;
-    t.textContent = '每月例行';
-    sub.textContent = `共 ${(state.series || []).length} 个系列 · ${alive} 个在跑`;
+    t.textContent = '例行待办';
+    sub.textContent = `共 ${(state.series || []).length} 个例行 · ${alive} 个在跑`;
     tools.append(el('button', {
-      class: 'tool-btn', text: '＋ 新建例行', title: '新建一个每月重复的待办',
+      class: 'tool-btn', text: '＋ 新建例行', title: '新建一个按月 / 按天 / 按周的例行待办',
       onclick: () => openNewTaskModal({ recurring: true }),
     }));
   }
@@ -1130,7 +1495,21 @@ function renderDetail() {
   );
   const dueInput = el('input', { type: 'date', value: t.due_on || '', onchange: () => queuePatch({ dueOn: dueInput.value || null }) });
   const dueTime = el('input', { type: 'time', value: t.due_time || '', onchange: () => queuePatch({ dueTime: dueTime.value || null }) });
+  const remindInput = el('input', {
+    class: 'd-remind',
+    type: 'datetime-local',
+    value: t.remind_at || '',
+    title: '到点弹系统通知；改了时间会重新计一次',
+    onchange: () => queuePatch({ remindAt: remindInput.value || null }),
+  });
   const estInput = el('input', { type: 'number', min: '1', step: '5', value: t.estimate_min ?? '', placeholder: '分钟', onchange: () => queuePatch({ estimateMin: estInput.value ? Number(estInput.value) : null }) });
+  const actInput = el('input', { type: 'number', min: '1', step: '5', value: t.actual_min ?? '', placeholder: '分钟', onchange: () => queuePatch({ actualMin: actInput.value ? Number(actInput.value) : null }) });
+  const pinBtn = el('button', {
+    class: `btn small${t.pinned ? ' on' : ' ghost'}`,
+    title: t.pinned ? '取消置顶' : '置顶后永远排在列表最前',
+    text: t.pinned ? '📌 已置顶' : '📌 置顶',
+    onclick: () => { t.pinned = t.pinned ? 0 : 1; queuePatch({ pinned: t.pinned }); renderDetail(); },
+  });
 
   root.append(el('div', { class: 'd-section' },
     el('div', { class: 'd-label', text: '安排' }),
@@ -1139,9 +1518,62 @@ function renderDetail() {
       el('div', { class: 'field' }, el('span', { text: '优先级' }), prio),
       el('label', { class: 'field' }, el('span', { text: '截止日期' }), dueInput),
       el('label', { class: 'field' }, el('span', { text: '时间' }), dueTime),
-      el('label', { class: 'field' }, el('span', { text: '预估耗时' }), estInput)
-    )
+      el('label', { class: 'field wide' }, el('span', { text: '提醒' }), remindInput),
+      el('label', { class: 'field' }, el('span', { text: '预估耗时' }), estInput),
+      el('label', { class: 'field' }, el('span', { text: '实际耗时' }), actInput)
+    ),
+    el('div', { class: 'd-row' }, pinBtn)
   ));
+
+  // 子待办：只允许一层，只在父任务详情里维护；子项不单独归档，跟着父任务的 md checklist 走
+  if (!t.parent_id) {
+    const kids = d.children || [];
+    const kidsDone = kids.filter((k) => k.status === 'done').length;
+    const afterKidChange = async () => {
+      await selectTask(t.id);
+      await refresh();
+    };
+    const kidList = el('div', { class: 'kids' });
+    for (const k of kids) {
+      const kidDone = k.status === 'done';
+      kidList.append(el('div', { class: `kid${kidDone ? ' done' : ''}` },
+        el('button', {
+          class: 'tick', title: kidDone ? '重新打开' : '完成', text: '✓',
+          onclick: async () => {
+            try {
+              await api.post(kidDone ? `/api/tasks/${k.id}/reopen` : `/api/tasks/${k.id}/complete`, {});
+              await afterKidChange();
+            } catch (err) { showErr(err); }
+          },
+        }),
+        el('span', { class: 'kid-title', text: k.title }),
+        el('button', {
+          class: 'kid-del', title: '删除子待办', text: '✕',
+          onclick: async () => {
+            try { await api.del(`/api/tasks/${k.id}`); await afterKidChange(); } catch (err) { showErr(err); }
+          },
+        })
+      ));
+    }
+    const kidInput = el('input', { class: 'kid-input', placeholder: '＋ 回车添加子待办' });
+    kidInput.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !kidInput.value.trim()) return;
+      e.preventDefault();
+      const title = kidInput.value.trim();
+      kidInput.value = '';
+      try {
+        await api.post('/api/tasks', {
+          title, parentId: t.id, categoryId: t.category_id, priority: t.priority,
+        });
+        await afterKidChange();
+      } catch (err) { showErr(err); }
+    });
+    root.append(el('div', { class: 'd-section' },
+      el('div', { class: 'd-label' }, kids.length ? `子待办（${kidsDone}/${kids.length}）` : '子待办'),
+      kidList,
+      kidInput
+    ));
+  }
 
   // 完成说明（已完成才有）
   if (isDone) {
@@ -1149,16 +1581,17 @@ function renderDetail() {
     root.append(el('div', { class: 'd-section' }, el('div', { class: 'd-label', text: '完成说明' }), el('label', { class: 'field' }, note)));
   }
 
-  // 每月例行：让某一期能回溯到整个系列
+  // 重复：让某一期能回溯到整个系列
   if (t.series_id) {
     const s = (state.series || []).find((x) => x.id === t.series_id);
+    const label = s?.rule_label || `每月 ${s?.day_of_month ?? ''} 号`.trim();
     root.append(el('div', { class: 'd-section' },
-      el('div', { class: 'd-label', text: '每月例行' }),
+      el('div', { class: 'd-label', text: '例行待办' }),
       el('button', {
         class: 'd-link', title: '打开例行列表',
         onclick: () => setView('series'),
       }, el('span', { class: 'series-icon', text: '↻' }),
-        el('span', { text: s ? `${s.title} · 每月 ${s.day_of_month} 号` : '属于一个每月例行' }),
+        el('span', { text: s ? `${s.title} · ${label}` : '属于一个例行待办' }),
         el('span', { class: 'd-link-arrow', text: '›' }))
     ));
   }
@@ -1253,6 +1686,13 @@ function renderDetail() {
 async function completeTask(t) {
   try {
     const r = await api.post(`/api/tasks/${t.id}/complete`, {});
+    // 每日/每周周期：这一次完成变成历史行，活行滚到下一期，撤销没有意义（不做「撤销」按钮）
+    if (r.repeated?.next) {
+      toast(`已完成这一期 · 下一期 ${r.repeated.next}`, { ms: 5200 });
+      if (state.detail?.task.id === t.id) await selectTask(t.id);
+      afterMutation();
+      return;
+    }
     const archived = r.task?.archived_path;
     toast(archived ? `已完成，归档到 ${archived.split('/')[0]} 年 ${Number(archived.split('/')[1]?.slice(5))} 月` : '已完成', {
       actionLabel: '撤销',
@@ -1366,6 +1806,36 @@ function nextWeekday(ch) {
   return addDays(todayStr(), diff);
 }
 
+const WD_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 'YYYY-MM-DD' → 0=周一 … 6=周日（和服务端的 recur.weekdayOf 同一口径） */
+function weekdayOf(dateStr) {
+  return (parseDate(dateStr).getDay() + 6) % 7;
+}
+
+/**
+ * 把「1. 报价 2. 对账 3. 发合同」这类序号列表拆成多条待办（借 x-hub 的口径）。
+ * 规则：至少两个序号才拆；序号后不能紧跟数字，免得把 3.14 / 2.0 拆开；
+ * 第一条序号前的文字若是「明天要做：」这种标题就丢掉，否则保留成一条。
+ */
+function splitNumberedList(raw) {
+  const text = String(raw || '');
+  const re = /(?:^|[\s;；,，、])(\d{1,3})\s*[.．、)]\s*(?!\d)/g;
+  const marks = [];
+  let m;
+  while ((m = re.exec(text)) !== null) marks.push({ start: m.index, end: m.index + m[0].length });
+  if (marks.length < 2) return null;
+  const out = [];
+  const prelude = text.slice(0, marks[0].start).replace(/[\s;；,，、]+$/, '').trim();
+  if (prelude && !/[：:]$/.test(prelude)) out.push(prelude);
+  for (let i = 0; i < marks.length; i += 1) {
+    const to = i + 1 < marks.length ? marks[i + 1].start : text.length;
+    const body = text.slice(marks[i].end, to).replace(/[\s;；,，、]+$/, '').trim();
+    if (body) out.push(body);
+  }
+  return out.length >= 2 ? out : null;
+}
+
 /* ------------------------------ 新建待办（完整表单） ------------------------------ */
 // 弹窗内的本地状态；弹窗关闭后不保留
 function defaultCategoryId() {
@@ -1398,10 +1868,13 @@ function openNewTaskModal(opts = {}) {
     dueTime: '',
     tags: Array.isArray(pre?.tags) ? pre.tags.slice() : [],
   };
-  // 每月例行：默认每月今天这个号，跑未来 36 期（3 年）
+  // 重复：默认每月今天这个号，跑未来 36 期（3 年）；也可以改成每 N 天 / 每 N 周
   const recur = {
     on: Boolean(opts.recurring),
+    rule: 'monthly',
     day: state.bootstrap?.today ? Number(state.bootstrap.today.slice(8, 10)) : new Date().getDate(),
+    interval: 1,
+    weekday: weekdayOf(todayStr()),
     horizon: 36,
   };
   if (recur.on) model.dueOn = nextOccurrence(recur.day);
@@ -1576,9 +2049,16 @@ function openNewTaskModal(opts = {}) {
     void start; void end;
   }
 
-  /* ---- 每月例行 ---- */
-  const recurInput = el('input', { type: 'checkbox', class: 'tm-box', id: 'tmRecur', 'aria-label': '每月例行' });
+  /* ---- 重复 ---- */
+  const recurInput = el('input', { type: 'checkbox', class: 'tm-box', id: 'tmRecur', 'aria-label': '重复' });
   recurInput.checked = recur.on;
+  const ruleSel = el('select', { class: 'tm-input', id: 'tmRule', 'aria-label': '重复规则' },
+    el('option', { value: 'monthly', text: '每月某日' }),
+    el('option', { value: 'daily', text: '每 N 天' }),
+    el('option', { value: 'weekly', text: '每 N 周' })
+  );
+  ruleSel.value = recur.rule;
+  ruleSel.addEventListener('change', () => { recur.rule = ruleSel.value; drawRecur(); });
   const recurDay = el('span', { class: 'tm-recur-day', id: 'tmRecurDay', text: `${recur.day} 号` });
   const dayGrid = el('div', { class: 'tm-daygrid', id: 'tmDayGrid' });
   const recurHint = el('p', { class: 'tm-sub', id: 'tmRecurHint', text: '' });
@@ -1587,17 +2067,60 @@ function openNewTaskModal(opts = {}) {
   );
   horizonSel.value = String(recur.horizon);
   horizonSel.addEventListener('change', () => { recur.horizon = Number(horizonSel.value); drawRecur(); });
+
+  const mkInterval = (id) => {
+    const inp = el('input', { type: 'number', class: 'tm-input tm-num', id, min: '1', max: '60', step: '1', 'aria-label': '间隔' });
+    inp.value = String(recur.interval);
+    inp.addEventListener('input', () => {
+      const n = Number(inp.value);
+      if (!Number.isInteger(n) || n < 1 || n > 60) return;
+      recur.interval = n;
+      // 两个输入框共用同一个状态，改一个另一个跟着动
+      const other = id === 'tmIntervalDaily' ? intervalWeekly : intervalDaily;
+      if (other && other.value !== String(n)) other.value = String(n);
+      refreshHint();
+    });
+    return inp;
+  };
+  let intervalDaily = null;
+  let intervalWeekly = null;
+  intervalDaily = mkInterval('tmIntervalDaily');
+  intervalWeekly = mkInterval('tmIntervalWeekly');
+  const weekdaySel = el('select', { class: 'tm-input', id: 'tmWeekday', 'aria-label': '星期几' },
+    WD_NAMES.map((n, i) => el('option', { value: String(i), text: n }))
+  );
+  weekdaySel.value = String(recur.weekday);
+  weekdaySel.addEventListener('change', () => { recur.weekday = Number(weekdaySel.value); refreshHint(); });
+
+  const monthlyRow = el('div', { class: 'tm-row', id: 'tmMonthlyRow' },
+    el('span', { class: 'tm-label', text: '每月' }),
+    recurDay
+  );
+  const horizonRow = el('div', { class: 'tm-row', id: 'tmHorizonRow' },
+    el('span', { class: 'tm-label', text: '范围' }),
+    horizonSel,
+    el('span', { class: 'tm-unit', text: '期' })
+  );
+  const dailyRow = el('div', { class: 'tm-row', id: 'tmDailyRow' },
+    el('span', { class: 'tm-label', text: '每隔' }),
+    el('span', { class: 'tm-suffix' }, intervalDaily, el('span', { class: 'tm-unit', text: '天' }))
+  );
+  const weeklyRow = el('div', { class: 'tm-row', id: 'tmWeeklyRow' },
+    el('span', { class: 'tm-label', text: '每隔' }),
+    el('span', { class: 'tm-suffix' }, intervalWeekly, el('span', { class: 'tm-unit', text: '周' })),
+    weekdaySel
+  );
+
   const recurPanel = el('div', { class: 'tm-recur', id: 'tmRecurPanel' },
     el('div', { class: 'tm-row' },
-      el('span', { class: 'tm-label', text: '每月' }),
-      recurDay
+      el('span', { class: 'tm-label', text: '规则' }),
+      ruleSel
     ),
+    monthlyRow,
     dayGrid,
-    el('div', { class: 'tm-row' },
-      el('span', { class: 'tm-label', text: '范围' }),
-      horizonSel,
-      el('span', { class: 'tm-unit', text: '期' })
-    ),
+    horizonRow,
+    dailyRow,
+    weeklyRow,
     recurHint
   );
 
@@ -1618,23 +2141,43 @@ function openNewTaskModal(opts = {}) {
       }));
     }
   }
+  function refreshHint() {
+    if (!recur.on) { recurHint.textContent = ''; return; }
+    if (recur.rule === 'monthly') {
+      const first = model.dueOn && model.dueOn >= todayStr() ? model.dueOn : nextOccurrence(recur.day);
+      recurHint.textContent = `会从 ${first} 开始，一次铺出未来 ${recur.horizon} 期；之后每次打开工作台自动往后补。可在「例行待办」里取消整个系列。`;
+      return;
+    }
+    const from = model.dueOn && model.dueOn >= todayStr() ? model.dueOn : todayStr();
+    const every = recur.rule === 'daily'
+      ? `每 ${recur.interval} 天`
+      : `每 ${recur.interval} 周的${WD_NAMES[recur.weekday] || '周一'}`;
+    recurHint.textContent = `从 ${from} 开始${every}一次。勾掉一次就滚到下一期，中间漏掉的期直接跳过，不会堆出一摞逾期副本。`;
+  }
   function drawRecur() {
     recurInput.checked = recur.on;
     recurPanel.hidden = !recur.on;
+    ruleSel.value = recur.rule;
     recurDay.textContent = `${recur.day} 号`;
     horizonSel.value = String(recur.horizon);
+    const monthly = recur.rule === 'monthly';
+    monthlyRow.hidden = !monthly;
+    dayGrid.hidden = !monthly;
+    horizonRow.hidden = !monthly;
+    dailyRow.hidden = recur.rule !== 'daily';
+    weeklyRow.hidden = recur.rule !== 'weekly';
     drawDayGrid();
-    if (recur.on) {
-      const first = model.dueOn && model.dueOn >= todayStr() ? model.dueOn : nextOccurrence(recur.day);
-      recurHint.textContent = `会从 ${first} 开始，一次铺出未来 ${recur.horizon} 期；之后每次打开工作台自动往后补。可在「例行」里取消整个系列。`;
-    }
+    refreshHint();
   }
   recurInput.addEventListener('change', () => {
     recur.on = recurInput.checked;
     if (recur.on) {
-      // 勾上例行就把截止日期自动补上：这个月还没到这个号就用这个月，过了就用下个月
-      if (!model.dueOn || model.dueOn < todayStr()) model.dueOn = nextOccurrence(recur.day);
-      else recur.day = Number(model.dueOn.slice(8, 10));
+      // 勾上重复就把截止日期自动补上：这个月还没到这个号就用这个月，过了就用下个月
+      if (!model.dueOn || model.dueOn < todayStr()) {
+        model.dueOn = recur.rule === 'monthly' ? nextOccurrence(recur.day) : todayStr();
+      } else if (recur.rule === 'monthly') {
+        recur.day = Number(model.dueOn.slice(8, 10));
+      }
       drawDueValue();
       if (!catPop.hidden) toggleCatDrawer();
       if (!calBox.hidden) closeCal();
@@ -1711,8 +2254,8 @@ function openNewTaskModal(opts = {}) {
       el('div', { class: 'tm-row' }, el('span', { class: 'tm-label', text: '优先级' }), prio),
       dueRow, calBox,
       el('div', { class: 'tm-row tm-row-check' },
-        el('label', { class: 'tm-recur-toggle', for: 'tmRecur' }, recurInput, el('span', { text: '每月例行' })),
-        el('span', { class: 'tm-note', text: '到期后按月重复' })
+        el('label', { class: 'tm-recur-toggle', for: 'tmRecur' }, recurInput, el('span', { text: '重复' })),
+        el('span', { class: 'tm-note', text: '到期后自动生成下一次' })
       ),
       recurPanel,
       el('div', { class: 'tm-row' }, el('span', { class: 'tm-label', text: '时间' }), timeInput),
@@ -1785,7 +2328,15 @@ function openNewTaskModal(opts = {}) {
     if (!m.title) return '先写一句待办内容';
     if (m.title.length > 200) return '标题最多 200 个字';
     if (m.dueTime && !m.dueOn) return '设了时间就要先选日期';
-    if (m.recurrence && !(Number.isInteger(m.recurrence.day_of_month) && m.recurrence.day_of_month >= 1 && m.recurrence.day_of_month <= 31)) return '每月例行要选 1–31 号中的一天';
+    if (m.recurrence) {
+      const r = m.recurrence;
+      if (r.rule === 'monthly' && !(Number.isInteger(r.day_of_month) && r.day_of_month >= 1 && r.day_of_month <= 31)) {
+        return '每月重复要选 1–31 号中的一天';
+      }
+      if (r.rule !== 'monthly' && !(Number.isInteger(r.interval_n) && r.interval_n >= 1 && r.interval_n <= 60)) {
+        return '间隔要写 1–60';
+      }
+    }
     if (m.estimateMin != null && (!Number.isInteger(m.estimateMin) || m.estimateMin < 1 || m.estimateMin > 1440)) return '预估耗时写 1–1440 分钟';
     if (m.folder && !/^([a-zA-Z]:[\\/]|\\\\)/.test(m.folder)) return '文件夹要填绝对路径，比如 E:\\合同\\2026';
     return '';
@@ -1798,9 +2349,19 @@ function openNewTaskModal(opts = {}) {
     let dueOn = model.dueOn || null;
     let recurrence = null;
     if (recur.on) {
-      dueOn = dueOn && dueOn >= todayStr() ? dueOn : nextOccurrence(recur.day);
-      model.dueOn = dueOn;
-      recurrence = { rule: 'monthly', day_of_month: recur.day, start_month: monthOf(dueOn), horizon_months: recur.horizon };
+      if (recur.rule === 'monthly') {
+        dueOn = dueOn && dueOn >= todayStr() ? dueOn : nextOccurrence(recur.day);
+        model.dueOn = dueOn;
+        recurrence = { rule: 'monthly', day_of_month: recur.day, start_month: monthOf(dueOn), horizon_months: recur.horizon };
+      } else {
+        // 每日/每周：起始日就是这一期的日期，服务端只建一条活行，完成时自己滚
+        const start = dueOn && dueOn >= todayStr() ? dueOn : todayStr();
+        dueOn = start;
+        model.dueOn = start;
+        recurrence = recur.rule === 'daily'
+          ? { rule: 'daily', start_date: start, interval_n: recur.interval }
+          : { rule: 'weekly', start_date: start, interval_n: recur.interval, weekday: recur.weekday };
+      }
     }
     const m = {
       title: title.value.trim(),
@@ -1824,6 +2385,39 @@ function openNewTaskModal(opts = {}) {
     busy = true;
     okBtn.disabled = true;
     okBtn.textContent = '创建中…';
+
+    // 序号列表拆多条：一次把「1. 报价 2. 对账」建成两条待办
+    const parts = recurrence ? null : splitNumberedList(m.title);
+    if (parts && parts.length >= 2) {
+      const made = [];
+      const failed = [];
+      for (const part of parts) {
+        try {
+          const r = await api.post('/api/tasks', { ...m, title: part.slice(0, 200), recurrence: null });
+          made.push(r.task.id);
+        } catch (err) {
+          failed.push(err?.message || '创建失败');
+        }
+      }
+      state.flashTaskId = made[0] || null;
+      close();
+      if (['done', 'archive', 'stats'].includes(state.view) || isDoneDay()) await setView('focus');
+      else await refresh();
+      if (made.length) {
+        toast(`已拆成 ${made.length} 条待办${failed.length ? `，${failed.length} 条失败：${failed[0]}` : ''}`, {
+          actionLabel: '打开第一条',
+          onAction: () => selectTask(made[0]),
+          ms: 7000,
+        });
+      } else {
+        toast('一条都没建成：' + (failed[0] || '未知错误'));
+      }
+      setTimeout(() => {
+        state.flashTaskId = null;
+        $$('.row.flash').forEach((n) => n.classList.remove('flash'));
+      }, 1800);
+      return;
+    }
     try {
       const r = await api.post('/api/tasks', m);
       const id = r.task.id;
@@ -1834,7 +2428,10 @@ function openNewTaskModal(opts = {}) {
         await loadSeries();
         if (needSwitch) await setView('focus');
         else await refresh();
-        toast(`已建例行：每月 ${r.series.day_of_month} 号，铺了 ${r.seriesOccurrences} 期`, {
+        const label = r.series.rule_label || `每月 ${r.series.day_of_month} 号`;
+        toast(r.series.rule === 'monthly'
+          ? `已建例行：${label}，铺了 ${r.seriesOccurrences} 期`
+          : `已建例行：${label}，从 ${r.task?.due_on || todayStr()} 开始滚动`, {
           actionLabel: '查看',
           onAction: () => setView('series'),
           ms: 7000,
@@ -1990,6 +2587,11 @@ function openSettings() {
       el('div', { class: 'm-field' }, el('label', { text: '外观' }), themeSel),
       lead, stale, week,
       el('div', { class: 'm-field' },
+        el('label', { text: '到期提醒' }),
+        el('div', { class: 'hint' }, '页面开着时每 20 秒检查一次；到点弹系统通知，页面里也留一条提示。'),
+        el('button', { class: 'btn', style: { marginTop: '6px' }, text: '开启系统通知', onclick: requestNotifyPermission })
+      ),
+      el('div', { class: 'm-field' },
         el('label', { text: '数据位置' }),
         el('div', { class: 'hint' }, `数据库：${state.bootstrap?.dbPathHint || 'workbench/data/workbench.db'}`),
         el('div', { class: 'hint' }, `归档目录：${state.bootstrap?.archiveRoot || ''}`),
@@ -2030,6 +2632,37 @@ async function rerenderArchive() {
   } catch (err) { showErr(err); }
 }
 
+/* 导出：把「现在看到的筛选」原样拼成查询串，服务端和 listTasks 同构 */
+function exportParams() {
+  const p = new URLSearchParams();
+  if (state.view === 'day' && state.day) {
+    if (isDoneDay()) { p.set('status', 'done'); p.set('doneOn', state.day); }
+    else { p.set('status', 'open'); p.set('due', state.day); }
+    return p;
+  }
+  p.set('status', 'open');
+  if (state.filter.cat) p.set('category', state.filter.cat);
+  if (state.filter.tag) p.set('tag', state.filter.tag);
+  if (state.filter.q) p.set('q', state.filter.q);
+  return p;
+}
+
+async function exportCurrent() {
+  try {
+    const res = await fetch(`/api/export.md?${exportParams().toString()}`, { headers: { 'x-wb-token': TOKEN } });
+    if (!res.ok) throw new Error('导出失败');
+    const text = await res.text();
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const a = el('a', { href: URL.createObjectURL(blob), download: `待办导出-${todayStr()}.md` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    toast('已导出当前筛选');
+  } catch (err) {
+    showErr(err);
+  }
+}
+
 async function downloadBriefing() {
   try {
     const res = await fetch('/api/briefing.md', { headers: { 'x-wb-token': TOKEN } });
@@ -2042,6 +2675,49 @@ async function downloadBriefing() {
   } catch (err) { showErr(err); }
 }
 
+/* --------------------------- 到期提醒（轮询） --------------------------- */
+// 服务端用 remind_fired 抢占：页面和托盘谁先轮到谁发。这里只负责把抢到的弹出来。
+async function pollReminders() {
+  try {
+    const r = await api.get('/api/reminders');
+    for (const item of r.reminders || []) notifyReminder(item);
+  } catch {
+    /* 服务没起来就下一轮再来，别弹错误打扰人 */
+  }
+}
+
+function notifyReminder(item) {
+  toast(`⏰ ${item.title}`, { ms: 9000, actionLabel: '打开', onAction: () => selectTask(item.id) });
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const when = item.remind_at ? item.remind_at.replace('T', ' ') : '';
+    const body = [item.category_name || '未分类', item.due_on ? `截止 ${item.due_on}` : '无截止日期', when ? `提醒 ${when}` : '']
+      .filter(Boolean).join(' · ');
+    const n = new Notification(`待办提醒：${item.title}`, { body, tag: `wb-${item.id}` });
+    n.onclick = () => { window.focus(); selectTask(item.id); n.close(); };
+  } catch {
+    /* 浏览器不支持系统通知时，页面 toast 已经提示过了 */
+  }
+}
+
+async function requestNotifyPermission() {
+  if (!('Notification' in window)) {
+    toast('这个浏览器不支持系统通知，到点只会在页面里提示');
+    return;
+  }
+  if (Notification.permission === 'granted') { toast('系统通知已经开着'); return; }
+  if (Notification.permission === 'denied') {
+    toast('系统通知被拒绝过，要在地址栏左侧手动改成「允许」');
+    return;
+  }
+  try {
+    const p = await Notification.requestPermission();
+    toast(p === 'granted' ? '系统通知已开启' : '没拿到通知权限，到点只在页面里提示');
+  } catch (err) {
+    showErr(err);
+  }
+}
+
 /* ------------------------------ 视图切换 ------------------------------ */
 function setView(view) {
   state.view = view;
@@ -2050,26 +2726,30 @@ function setView(view) {
   refresh();
 }
 
-/* ------------------------------ 每月例行 ------------------------------ */
+/* ------------------------------ 重复（例行系列） ------------------------------ */
 function renderSeries() {
   const list = $('#list');
   list.innerHTML = '';
   const rows = state.series || [];
   if (!rows.length) {
-    showEmpty('还没有每月例行的事', '点右上角「＋ 添加」，勾上「每月例行」，填个号数就行。');
+    showEmpty('还没有例行待办', '点右上角「＋ 添加」，勾上「重复」，可以选每月某日、每 N 天或每 N 周。');
     return;
   }
   const card = el('div', { class: 'card series-card' });
   for (const s of rows) {
     const off = s.status !== 'active';
     card.append(el('div', { class: `series-row${off ? ' off' : ''}` },
-      el('span', { class: 'series-icon', text: '↻', title: '每月例行' }),
+      el('span', { class: 'series-icon', text: '↻', title: '例行待办' }),
       el('div', { class: 'series-main' },
         el('div', { class: 'series-title', text: s.title }),
         el('div', { class: 'series-meta' },
-          el('span', { text: `每月 ${s.day_of_month} 号` }),
+          el('span', { text: s.rule_label || `每月 ${s.day_of_month} 号` }),
           s.next_on ? el('span', { text: `下一期 ${s.next_on}` }) : el('span', { text: '没有未完成的期了' }),
-          el('span', { text: `待办 ${s.open_count} · 已排期 ${s.scheduled_count || 0} · 已完成 ${s.done_count} · 共 ${s.total_count} 期` }),
+          el('span', {
+            text: s.rule === 'monthly'
+              ? `待办 ${s.open_count} · 已排期 ${s.scheduled_count || 0} · 已完成 ${s.done_count} · 共 ${s.total_count} 期`
+              : `待办 ${s.open_count} · 已滚 ${s.repeat_done_count || 0} 轮`,
+          }),
           off ? el('span', { class: 'series-badge', text: '已取消' }) : null
         )
       ),
@@ -2146,6 +2826,7 @@ function renderAll() {
   else if (state.view === 'done') renderDone();
   else if (state.view === 'archive') renderArchive();
   else if (state.view === 'stats') renderStats();
+  else if (state.view === 'calendar') renderCalendarView();
   renderStatusBar();
   document.body.querySelector('.body').classList.toggle('no-detail', !state.selectedId);
   renderDetail();
@@ -2259,7 +2940,8 @@ function bindEvents() {
       document.documentElement.dataset.theme = qTheme;
     }
     const qView = q?.get('view');
-    if (['focus', 'today', 'all', 'series', 'done', 'archive', 'stats', 'day'].includes(qView)) state.view = qView;
+    // 白名单直接取自 VIEWS，新增视图不用再改这里（'day' 是临时视图，不在 VIEWS 里）
+    if (qView === 'day' || VIEWS.some((v) => v.id === qView)) state.view = qView;
     if (state.view === 'day') {
       const qDate = q?.get('date') || '';
       state.day = /^\d{4}-\d{2}-\d{2}$/.test(qDate) ? qDate : localDate();
@@ -2276,6 +2958,9 @@ function bindEvents() {
     await refresh();
     // 每秒刷新一次「今天」判断，跨零点不至于卡在旧日期
     setInterval(() => { if (state.bootstrap && state.bootstrap.today !== localDate()) refresh(); }, 60000);
+    // 到期提醒：20 秒一轮，服务端用 remind_fired 抢占，托盘和页面不会重复弹
+    pollReminders();
+    setInterval(pollReminders, 20000);
   } catch (err) {
     console.error(err);
     document.body.innerHTML = `<div style="padding:40px;font-family:sans-serif;color:#B91C1C">启动失败：${err.message}</div>`;

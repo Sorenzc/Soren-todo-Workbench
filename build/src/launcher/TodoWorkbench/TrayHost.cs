@@ -1,6 +1,9 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -15,6 +18,13 @@ namespace TodoWorkbench
 		private readonly StatusForm splash;
 
 		private string url;
+
+		// 托盘侧提醒轮询：页面关掉后只剩这一条通道，靠服务端的 remind_fired 抢占去重
+		private Thread reminderThread;
+
+		private volatile bool reminderAlive = true;
+
+		private string token;
 
 		public TrayHost(string exeDir)
 		{
@@ -86,9 +96,156 @@ namespace TodoWorkbench
 				}
 			};
 			tray.ContextMenuStrip = contextMenuStrip;
+			tray.BalloonTipClicked += delegate
+			{
+				Open();
+			};
 			Thread thread = new Thread(Run);
 			thread.IsBackground = true;
 			thread.Start();
+			StartReminderLoop();
+		}
+
+		private void StartReminderLoop()
+		{
+			reminderThread = new Thread(ReminderLoop);
+			reminderThread.IsBackground = true;
+			reminderThread.Start();
+		}
+
+		/// <summary>
+		/// 每 30 秒问一次 /api/reminders。服务端起不来、端口还没定、token 还没写，
+		/// 都只是「下一轮再说」，绝不在这里弹错误——托盘是后台进程，不能吓人。
+		/// </summary>
+		private void ReminderLoop()
+		{
+			while (reminderAlive)
+			{
+				try
+				{
+					string baseUrl = Program.ServerUrl;
+					if (!string.IsNullOrEmpty(baseUrl))
+					{
+						if (string.IsNullOrEmpty(token))
+						{
+							token = ReadToken();
+						}
+						if (!string.IsNullOrEmpty(token))
+						{
+							string body = GetJson(baseUrl + "api/reminders", token);
+							if (!string.IsNullOrEmpty(body))
+							{
+								foreach (string title in ExtractTitles(body))
+								{
+									ShowReminder(title);
+								}
+							}
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					Program.Log("reminder poll failed: " + ex.Message);
+				}
+				Thread.Sleep(30000);
+			}
+		}
+
+		private static string ReadToken()
+		{
+			try
+			{
+				string path = Path.Combine(Program.DataDir, "token.txt");
+				if (File.Exists(path))
+				{
+					string text = File.ReadAllText(path).Trim();
+					return (text.Length > 0) ? text : null;
+				}
+			}
+			catch (Exception ex)
+			{
+				Program.Log("read token failed: " + ex.Message);
+			}
+			return null;
+		}
+
+		private static string GetJson(string url, string token)
+		{
+			HttpWebRequest httpWebRequest = (HttpWebRequest)WebRequest.Create(url);
+			httpWebRequest.Timeout = 3000;
+			httpWebRequest.ReadWriteTimeout = 3000;
+			httpWebRequest.Proxy = null;
+			httpWebRequest.Headers.Add("x-wb-token", token);
+			using (HttpWebResponse httpWebResponse = (HttpWebResponse)httpWebRequest.GetResponse())
+			{
+				if (httpWebResponse.StatusCode != HttpStatusCode.OK)
+				{
+					return null;
+				}
+				using (StreamReader streamReader = new StreamReader(httpWebResponse.GetResponseStream(), Encoding.UTF8))
+				{
+					return streamReader.ReadToEnd();
+				}
+			}
+		}
+
+		/// <summary>
+		/// 只取每条提醒的 title：为了几行字引一个 JSON 库不值当，
+		/// 服务端返回的结构固定是 {"reminders":[{"title":"…"},…],"now":"…"}。
+		/// </summary>
+		private static System.Collections.Generic.List<string> ExtractTitles(string json)
+		{
+			System.Collections.Generic.List<string> titles = new System.Collections.Generic.List<string>();
+			MatchCollection matches = Regex.Matches(json, "\"title\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+			foreach (Match match in matches)
+			{
+				titles.Add(JsonUnescape(match.Groups[1].Value));
+			}
+			return titles;
+		}
+
+		private static string JsonUnescape(string text)
+		{
+			if (text.IndexOf('\\') < 0)
+			{
+				return text;
+			}
+			return Regex.Replace(text, "\\\\u([0-9a-fA-F]{4})|\\\\([\"\\\\/bfnrt])", delegate(Match m)
+			{
+				if (m.Groups[1].Success)
+				{
+					return ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString();
+				}
+				switch (m.Groups[2].Value)
+				{
+				case "\"":
+					return "\"";
+				case "\\":
+					return "\\";
+				case "/":
+					return "/";
+				case "b":
+				case "f":
+					return " ";
+				case "n":
+				case "r":
+				case "t":
+					return " ";
+				default:
+					return m.Value;
+				}
+			});
+		}
+
+		private void ShowReminder(string title)
+		{
+			Ui(delegate
+			{
+				tray.BalloonTipTitle = "待办提醒";
+				tray.BalloonTipText = title;
+				tray.BalloonTipIcon = ToolTipIcon.Info;
+				tray.ShowBalloonTip(8000);
+			});
 		}
 
 		private void Run()
@@ -218,6 +375,7 @@ namespace TodoWorkbench
 		{
 			if (MessageBox.Show("停止后台服务并退出？\r\n待办数据不会被删除。", "待办工作台", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK)
 			{
+				reminderAlive = false;
 				Program.StopServer();
 				tray.Visible = false;
 				ExitThread();

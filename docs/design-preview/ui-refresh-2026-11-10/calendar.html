@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>提案 B · 日历（iOS 日历参考）</title>
+<link rel="stylesheet" href="proposal.css">
+</head>
+<body>
+<div class="app no-detail">
+  <header class="topbar" style="grid-column:1 / -1">
+    <div class="brand"><span class="brand-mark">✓</span>待办工作台</div>
+    <span class="today-chip">2026-11-10 周二</span>
+    <div class="search">搜索待办、分类、标签<kbd>Ctrl K</kbd></div>
+    <div class="top-actions">
+      <span class="tbtn">简报</span><span class="tbtn">备份</span><span class="tbtn">日历</span>
+      <span class="tbtn icon">◐</span><span class="tbtn icon">⚙</span>
+    </div>
+  </header>
+
+  <aside class="side">
+    <div class="side-group">
+      <div class="nav-item"><span class="ico">◎</span>聚焦<span class="cnt">8</span></div>
+      <div class="nav-item"><span class="ico">◉</span>今天<span class="cnt">4</span></div>
+      <div class="nav-item"><span class="ico">≡</span>全部待办<span class="cnt">12</span></div>
+      <div class="nav-item"><span class="ico">↻</span>例行待办<span class="cnt">3</span></div>
+      <div class="nav-item"><span class="ico">✓</span>已完成<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="ico">▤</span>归档<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="ico">▦</span>统计</div>
+      <div class="nav-item active"><span class="ico">⊞</span>日历</div>
+    </div>
+    <div class="side-group">
+      <div class="side-title"><span>分类</span><b>＋</b></div>
+      <div class="nav-item"><span class="dot" style="background:#8E8E93"></span>全部分类<span class="cnt">12</span></div>
+      <div class="nav-item"><span class="dot" style="background:#30B0C7"></span>物业运营<span class="cnt">3</span></div>
+      <div class="nav-item"><span class="dot" style="background:#5856D6"></span>合同与法务<span class="cnt">2</span></div>
+      <div class="nav-item"><span class="dot" style="background:#AF52DE"></span>制度与流程<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="dot" style="background:#FF9500"></span>会议与汇报<span class="cnt">2</span></div>
+      <div class="nav-item"><span class="dot" style="background:#34C759"></span>行政事务<span class="cnt">3</span></div>
+    </div>
+    <div class="side-group">
+      <div class="side-title"><span>例行待办</span><b>＋</b></div>
+      <div class="nav-item"><span class="dot" style="background:#007AFF"></span>每日：能耗读数<span class="cnt">每天</span></div>
+      <div class="nav-item"><span class="dot" style="background:#007AFF"></span>每周三：例会纪要<span class="cnt">每周三</span></div>
+    </div>
+  </aside>
+
+  <main class="main" style="padding:14px 0 0">
+    <div class="view-head" style="padding:0 24px 12px">
+      <div>
+        <div class="view-title">日历</div>
+        <div class="view-sub">点格子看当天 · 拖条目改期 · 虚线是例行的未来几期</div>
+      </div>
+      <div class="view-tools">
+        <div class="seg"><span class="on">月</span><span>周</span></div>
+        <span class="btn">导出</span>
+      </div>
+    </div>
+
+    <div class="calwrap">
+      <div class="cal-card">
+        <div class="cal-head">
+          <div class="cal-month">2026 年 11 月<span>第 46 周</span></div>
+          <div class="cal-nav">
+            <span class="btn">‹</span><span class="btn today-btn">今天</span><span class="btn">›</span>
+          </div>
+        </div>
+
+        <div class="week-head">
+          <div>周一</div><div>周二</div><div>周三</div><div>周四</div><div>周五</div>
+          <div class="we">周六</div><div class="we">周日</div>
+        </div>
+
+        <div class="grid">
+          <!-- 第 1 周 -->
+          <div class="cell other"><div class="num">26</div></div>
+          <div class="cell other"><div class="num">27</div></div>
+          <div class="cell other"><div class="num">28</div></div>
+          <div class="cell other"><div class="num">29</div></div>
+          <div class="cell other"><div class="num">30</div></div>
+          <div class="cell other we"><div class="num">31</div></div>
+          <div class="cell other we"><div class="num">1</div></div>
+
+          <!-- 第 2 周 -->
+          <div class="cell"><div class="num">2</div></div>
+          <div class="cell"><div class="num">3</div></div>
+          <div class="cell"><div class="num">4</div></div>
+          <div class="cell"><div class="num">5</div></div>
+          <div class="cell"><div class="num">6</div></div>
+          <div class="cell we"><div class="num">7</div></div>
+          <div class="cell we late">
+            <div class="num">8</div>
+            <div class="ev red"><i style="background:#FF3B30"></i>确认 A 座消防年检整改回执并归档</div>
+          </div>
+
+          <!-- 第 3 周 -->
+          <div class="cell"><div class="num">9</div></div>
+          <div class="cell today sel">
+            <div class="num">10</div>
+            <div class="done">✓1</div>
+            <div class="ev blue"><i style="background:#007AFF"></i>把《会议室使用管理办法》定稿发全员</div>
+            <div class="ev orange"><i style="background:#FF9500"></i>给物业群发本周值班表</div>
+            <div class="ev purple"><i style="background:#AF52DE"></i>核对消防维保合同续签条款</div>
+            <div class="more">还有 2 条</div>
+          </div>
+          <div class="cell">
+            <div class="num">11</div>
+            <div class="ev indigo"><i style="background:#5856D6"></i>每周三：物业例会纪要整理</div>
+            <div class="ev blue"><i style="background:#007AFF"></i>每日：记录当天能耗读数</div>
+          </div>
+          <div class="cell">
+            <div class="num">12</div>
+            <div class="ev virt"><i></i>每日：记录当天能耗读数</div>
+          </div>
+          <div class="cell">
+            <div class="num">13</div>
+            <div class="ev green"><i style="background:#34C759"></i>整理第三季度供应商评估表</div>
+            <div class="ev virt"><i></i>每日：能耗读数</div>
+          </div>
+          <div class="cell we">
+            <div class="num">14</div>
+            <div class="ev virt"><i></i>每日：能耗读数</div>
+          </div>
+          <div class="cell we">
+            <div class="num">15</div>
+            <div class="ev virt"><i></i>每日：能耗读数</div>
+          </div>
+
+          <!-- 第 4 周 -->
+          <div class="cell"><div class="num">16</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">17</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">18</div><div class="ev virt"><i></i>每周三：例会纪要</div></div>
+          <div class="cell"><div class="num">19</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">20</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell we"><div class="num">21</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell we"><div class="num">22</div><div class="ev indigo"><i style="background:#5856D6"></i>梳理档案室历史合同电子化清单</div></div>
+
+          <!-- 第 5 周 -->
+          <div class="cell"><div class="num">23</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">24</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">25</div><div class="ev virt"><i></i>每周三：例会纪要</div></div>
+          <div class="cell"><div class="num">26</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell"><div class="num">27</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell we"><div class="num">28</div><div class="ev blue"><i style="background:#007AFF"></i>每月 28 号提交月度总结</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell we"><div class="num">29</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+
+          <!-- 第 6 周 -->
+          <div class="cell"><div class="num">30</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell other"><div class="num">1</div></div>
+          <div class="cell other"><div class="num">2</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell other"><div class="num">3</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell other"><div class="num">4</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell other we"><div class="num">5</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+          <div class="cell other we"><div class="num">6</div><div class="ev virt"><i></i>每日：能耗读数</div></div>
+        </div>
+
+        <div class="cal-foot">
+          <span>⚠</span><span>另有 1 条逾期未排进来（逾期 2 天：确认 A 座消防年检整改回执并归档）</span>
+          <span class="btn">去今天视图处理</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="status" style="padding:0 24px">
+      <span>本月 <b>13</b> 条</span><span>已完成 <b>1</b></span><span>例行未来期 <b>21</b></span>
+      <span class="kbd">拖条目改期 · ← → 换周 · 双击格子看当天</span>
+    </div>
+  </main>
+</div>
+</body>
+</html>

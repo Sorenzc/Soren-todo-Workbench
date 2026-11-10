@@ -24,8 +24,9 @@ CREATE TABLE IF NOT EXISTS category (
   CHECK (parent_id IS NULL OR parent_id <> id)
 ) STRICT;
 
--- ---------------- 例行系列（每月某日） ----------------
--- 规则模板；每一期是 task 表里的一条普通任务（series_id + occur_month 指回来）。
+-- ---------------- 例行系列（每月某日 / 每 N 天 / 每 N 周） ----------------
+-- 规则模板。monthly：每一期是 task 表里的一条普通任务（series_id + occur_month 指回来）。
+-- daily/weekly：不铺跑道，只维护一条「活行」；每完成一次留一条 done 历史行，活行滚到下一期。
 CREATE TABLE IF NOT EXISTS task_series (
   id              TEXT PRIMARY KEY,
   title           TEXT NOT NULL,
@@ -34,16 +35,23 @@ CREATE TABLE IF NOT EXISTS task_series (
   priority        INTEGER NOT NULL DEFAULT 2,
   due_time        TEXT,
   estimate_min    INTEGER,
-  rule            TEXT NOT NULL DEFAULT 'monthly',
-  day_of_month    INTEGER NOT NULL,              -- 用户意图 1..31，不因 2 月被改成 28
+  rule            TEXT NOT NULL DEFAULT 'monthly',  -- monthly | daily | weekly
+  interval_n      INTEGER NOT NULL DEFAULT 1,       -- daily/weekly：每 N 天 / 每 N 周
+  weekday         INTEGER,                          -- weekly：0=周一 … 6=周日
+  day_of_month    INTEGER NOT NULL,              -- monthly 用户意图 1..31；daily/weekly 记起始日号数
   start_month     TEXT NOT NULL,                 -- 'YYYY-MM'
-  horizon_months  INTEGER NOT NULL DEFAULT 36,   -- 永远保持未来多少期
-  watermark_month TEXT NOT NULL,                 -- 已生成到的最后一期
+  horizon_months  INTEGER NOT NULL DEFAULT 36,   -- monthly：永远保持未来多少期
+  watermark_month TEXT NOT NULL,                 -- monthly：已生成到的最后一期
+  next_on         TEXT,                          -- daily/weekly：活行当前这一期的日期
+  repeat_done_count INTEGER NOT NULL DEFAULT 0,  -- daily/weekly：已经滚过多少轮
+  last_done_at    TEXT,
   status          TEXT NOT NULL DEFAULT 'active',
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   rev             INTEGER NOT NULL DEFAULT 1,
-  CHECK (rule IN ('monthly')),
+  CHECK (rule IN ('monthly','daily','weekly')),
+  CHECK (interval_n BETWEEN 1 AND 60),
+  CHECK (weekday IS NULL OR weekday BETWEEN 0 AND 6),
   CHECK (day_of_month BETWEEN 1 AND 31),
   CHECK (horizon_months BETWEEN 1 AND 120),
   CHECK (status IN ('active','cancelled')),
@@ -77,6 +85,10 @@ CREATE TABLE IF NOT EXISTS task (
   archive_error   TEXT,
   done_note       TEXT,
   sort_order      INTEGER NOT NULL DEFAULT 0,
+  parent_id       TEXT,                          -- 子待办指向父任务；只允许一层，代码校验
+  remind_at       TEXT,                          -- 本地 'YYYY-MM-DDTHH:MM'，到点提醒
+  remind_fired    INTEGER NOT NULL DEFAULT 0,    -- 提醒已发出，防重复；改提醒时间时清零
+  pinned          INTEGER NOT NULL DEFAULT 0,    -- 置顶：排序永远在最前，范围档也压不住
   deleted_at      TEXT,
   CHECK (length(title) BETWEEN 1 AND 200),
   CHECK (status IN ('open','doing','done','dropped','scheduled')),

@@ -20,7 +20,7 @@ export function archiveTree(db) {
       `SELECT substr(completed_at,1,4) AS year, substr(completed_at,1,7) AS ym,
               count(*) AS n, max(completed_at) AS last_at
        FROM task
-       WHERE status = 'done' AND deleted_at IS NULL AND completed_at IS NOT NULL
+       WHERE status = 'done' AND deleted_at IS NULL AND completed_at IS NOT NULL AND parent_id IS NULL
        GROUP BY year, ym
        ORDER BY ym DESC`
     )
@@ -46,7 +46,8 @@ export function monthTasks(db, ym) {
               (SELECT l.id FROM task_link l WHERE l.task_id = t.id AND l.is_primary = 1) AS primary_link_id,
               (SELECT l.exists_state FROM task_link l WHERE l.task_id = t.id AND l.is_primary = 1) AS primary_link_state
        FROM task t LEFT JOIN category c ON c.id = t.category_id
-       WHERE t.status = 'done' AND t.deleted_at IS NULL AND substr(t.completed_at,1,7) = ?
+       WHERE t.status = 'done' AND t.deleted_at IS NULL AND t.parent_id IS NULL
+         AND substr(t.completed_at,1,7) = ?
        ORDER BY t.completed_at DESC`
     )
     .all(ym);
@@ -60,6 +61,14 @@ function humanTime(iso) {
 export function renderTaskMarkdown(db, task) {
   const links = listLinks(db, task.id);
   const tags = taskTags(db, task.id);
+  // 子待办不单独建归档文件，作为父任务的 checklist 落到同一个 md 里
+  const children = db
+    .prepare(
+      `SELECT title, status FROM task
+        WHERE parent_id = ? AND deleted_at IS NULL
+        ORDER BY created_at ASC, id ASC`
+    )
+    .all(task.id);
   const lines = [];
   lines.push(`# ${task.title}`, '');
   lines.push('| 项目 | 内容 |', '| --- | --- |');
@@ -68,6 +77,11 @@ export function renderTaskMarkdown(db, task) {
   lines.push(`| 优先级 | ${PRIORITY_SHORT[task.priority] ?? 'P2'} |`);
   if (tags.length) lines.push(`| 标签 | ${tags.map((t) => t.name).join('、')} |`);
   if (task.due_on) lines.push(`| 计划日期 | ${task.due_on} |`);
+  if (task.remind_at) lines.push(`| 提醒 | ${task.remind_at.replace('T', ' ')} |`);
+  if (children.length) {
+    const doneCount = children.filter((c) => c.status === 'done').length;
+    lines.push(`| 子项 | ${doneCount}/${children.length} 已完成 |`);
+  }
   if (task.actual_min) lines.push(`| 实际耗时 | ${task.actual_min} 分钟 |`);
   if (task.estimate_min) lines.push(`| 预估耗时 | ${task.estimate_min} 分钟 |`);
   lines.push(`| 创建时间 | ${humanTime(task.created_at)} |`);
@@ -76,6 +90,11 @@ export function renderTaskMarkdown(db, task) {
     lines.push(`| 关联${l.kind === 'folder' ? '文件夹' : '文件'} | ${l.path} |`);
   }
   lines.push('');
+  if (children.length) {
+    lines.push('## 子项', '');
+    for (const c of children) lines.push(`- [${c.status === 'done' ? 'x' : ' '}] ${c.title}`);
+    lines.push('');
+  }
   if (task.notes_md) {
     lines.push('## 笔记', '', task.notes_md, '');
   }
@@ -137,7 +156,7 @@ export function rebuildAll(db, archiveRoot) {
   const rows = db
     .prepare(
       `SELECT t.*, c.name AS category_name FROM task t LEFT JOIN category c ON c.id = t.category_id
-       WHERE t.status='done' AND t.deleted_at IS NULL`
+       WHERE t.status='done' AND t.deleted_at IS NULL AND t.parent_id IS NULL`
     )
     .all();
   let ok = 0;

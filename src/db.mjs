@@ -81,6 +81,50 @@ export function openDb(cfg) {
       'allow scheduled occurrences'
     );
   }
+  // v4：子待办 + 提醒（parent_id / remind_at / remind_fired）。
+  // 同上：引用新列的索引只能建在迁移里，schema.sql 先执行会报 no such column。
+  if (current < 4) {
+    ensureColumn(db, 'task', 'parent_id', 'TEXT');
+    ensureColumn(db, 'task', 'remind_at', 'TEXT');
+    ensureColumn(db, 'task', 'remind_fired', 'INTEGER NOT NULL DEFAULT 0');
+    db.exec('CREATE INDEX IF NOT EXISTS ix_task_parent ON task(parent_id) WHERE parent_id IS NOT NULL');
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS ix_task_remind ON task(remind_at) WHERE remind_at IS NOT NULL AND remind_fired = 0'
+    );
+    db.exec('PRAGMA user_version = 4');
+    db.prepare('INSERT OR IGNORE INTO schema_migration (version, applied_at, note) VALUES (?,?,?)').run(
+      4,
+      nowIso(),
+      'subtasks and reminders'
+    );
+  }
+  // v5：置顶 + 手动排序（pinned；sort_order 列早就有，v1 起默认 0）。
+  if (current < 5) {
+    ensureColumn(db, 'task', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
+    db.exec('PRAGMA user_version = 5');
+    db.prepare('INSERT OR IGNORE INTO schema_migration (version, applied_at, note) VALUES (?,?,?)').run(
+      5,
+      nowIso(),
+      'pinned tasks'
+    );
+  }
+  // v6：每日/每周周期。滚动系列只维护一条活行，同一个月会有活行 + 多条历史行，
+  // 所以 task 上的 ux_task_series_occur 唯一索引要降级成普通索引；
+  // 同时 task_series 的 rule CHECK 要放开到 daily/weekly —— SQLite 改不了 CHECK，按 12 步重建。
+  if (current < 6) {
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_series'").get();
+    if (ddl && !/daily/.test(ddl.sql || '')) rebuildTaskSeriesForRolling(db, cfg);
+    db.exec('DROP INDEX IF EXISTS ux_task_series_occur');
+    db.exec('CREATE INDEX IF NOT EXISTS ix_task_series_occur ON task(series_id, occur_month)');
+    db.exec('CREATE INDEX IF NOT EXISTS ix_task_series_due ON task(series_id, due_on)');
+    db.exec('CREATE INDEX IF NOT EXISTS ix_series_status ON task_series(status, watermark_month)');
+    db.exec('PRAGMA user_version = 6');
+    db.prepare('INSERT OR IGNORE INTO schema_migration (version, applied_at, note) VALUES (?,?,?)').run(
+      6,
+      nowIso(),
+      'daily and weekly series'
+    );
+  }
   seed(db);
   return db;
 }
@@ -160,8 +204,65 @@ function rebuildTaskForScheduledStatus(db, cfg) {
   }
 }
 
-function hasColumn(db, table, name) {
-  return db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === name);
+const SERIES_COLUMNS = [
+  'id', 'title', 'notes_md', 'category_id', 'priority', 'due_time', 'estimate_min', 'rule',
+  'day_of_month', 'start_month', 'horizon_months', 'watermark_month', 'status', 'created_at', 'updated_at', 'rev',
+];
+
+/** 重建 task_series 以放开 rule CHECK（v6：daily/weekly 周期）。重建前先留一份拷贝。 */
+function rebuildTaskSeriesForRolling(db, cfg) {
+  const cols = SERIES_COLUMNS.join(', ');
+  const safe = cfg.dbPath + '.pre-v6.bak';
+  if (!fs.existsSync(safe)) fs.copyFileSync(cfg.dbPath, safe);
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE task_series_new (
+        id              TEXT PRIMARY KEY,
+        title           TEXT NOT NULL,
+        notes_md        TEXT NOT NULL DEFAULT '',
+        category_id     TEXT REFERENCES category(id) ON DELETE SET NULL,
+        priority        INTEGER NOT NULL DEFAULT 2,
+        due_time        TEXT,
+        estimate_min    INTEGER,
+        rule            TEXT NOT NULL DEFAULT 'monthly',
+        interval_n      INTEGER NOT NULL DEFAULT 1,
+        weekday         INTEGER,
+        day_of_month    INTEGER NOT NULL,
+        start_month     TEXT NOT NULL,
+        horizon_months  INTEGER NOT NULL DEFAULT 36,
+        watermark_month TEXT NOT NULL,
+        next_on         TEXT,
+        repeat_done_count INTEGER NOT NULL DEFAULT 0,
+        last_done_at    TEXT,
+        status          TEXT NOT NULL DEFAULT 'active',
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        rev             INTEGER NOT NULL DEFAULT 1,
+        CHECK (rule IN ('monthly','daily','weekly')),
+        CHECK (interval_n BETWEEN 1 AND 60),
+        CHECK (weekday IS NULL OR weekday BETWEEN 0 AND 6),
+        CHECK (day_of_month BETWEEN 1 AND 31),
+        CHECK (horizon_months BETWEEN 1 AND 120),
+        CHECK (status IN ('active','cancelled')),
+        CHECK (length(title) BETWEEN 1 AND 200),
+        CHECK (start_month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+        CHECK (watermark_month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]')
+      ) STRICT`);
+    db.exec(`INSERT INTO task_series_new (${cols}) SELECT ${cols} FROM task_series`);
+    db.exec('DROP TABLE task_series');
+    db.exec('ALTER TABLE task_series_new RENAME TO task_series');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+function hasColumn(db, table, name) {  return db.prepare(`PRAGMA table_info(${table})`).all().some((r) => r.name === name);
 }
 
 function ensureColumn(db, table, name, decl) {

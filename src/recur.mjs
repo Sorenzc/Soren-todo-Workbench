@@ -50,3 +50,37 @@ export function nextOccurrenceFrom(ymd, day) {
 export function monthDiff(fromYm, toYm) {
   return (Number(toYm.slice(0, 4)) - Number(fromYm.slice(0, 4))) * 12 + (Number(toYm.slice(5, 7)) - Number(fromYm.slice(5, 7)));
 }
+
+const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 'YYYY-MM-DD' → 0=周一 … 6=周日（用 UTC 整数算，时区/夏令时不会把日期挪一天） */
+export function weekdayOf(ymd) {
+  const t = Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10)));
+  return (new Date(t).getUTCDay() + 6) % 7;
+}
+
+export function weekdayName(w) {
+  const i = Math.max(0, Math.min(6, Number(w) || 0));
+  return WEEKDAY_NAMES[i];
+}
+
+export function addDaysStr(ymd, n) {
+  const t = Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10))) + Number(n) * 86400000;
+  const dt = new Date(t);
+  const p = (v) => String(v).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
+}
+
+/** 滚动系列的下一期：weekly 一次跳 N 周，daily 跳 N 天 */
+export function stepRolling(ymd, rule, interval) {
+  const n = Math.max(1, Number(interval) || 1);
+  return addDaysStr(ymd, rule === 'weekly' ? 7 * n : n);
+}
+
+/** 从 ymd 起找第一个星期几匹配的日期（weekly 用：用户选了「每周三」但起始日不是周三） */
+export function alignWeekday(ymd, weekday) {
+  const want = Math.max(0, Math.min(6, Number(weekday) || 0));
+  let d = ymd;
+  for (let i = 0; i < 7 && weekdayOf(d) !== want; i += 1) d = addDaysStr(d, 1);
+  return d;
+}

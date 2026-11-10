@@ -19,6 +19,14 @@ import * as S from './series.mjs';
 import * as A from './archive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// 版本号只有一个来源：package.json（安装包、/api/health、页面角标都读它）
+const VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 const publicDir = path.resolve(here, '..', 'public');
 
 /* ------------------------------ 配置 ------------------------------ */
@@ -142,6 +150,11 @@ function decorateMany(rows) {
   );
 }
 
+function decorateOne(row) {
+  const s = getSettings(db);
+  return decorate(row, localDate(), { leadDays: Number(s.leadDays ?? 3), weekDays: Number(s.weekDays ?? 7) });
+}
+
 /* --------------------------- 静态资源 --------------------------- */
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -195,26 +208,31 @@ function serveStatic(req, res, pathname) {
 
 function bootstrap() {
   const cats = T.listCategories(db);
+  // 计数只看一级任务：子待办不算进「待办 / 逾期 / 今天」的总数
   const counts = {
     open: db
-      .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL")
+      .prepare(
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL"
+      )
       .get()?.n,
-    done: db.prepare("SELECT count(*) AS n FROM task WHERE status='done' AND deleted_at IS NULL").get()?.n,
+    done: db
+      .prepare("SELECT count(*) AS n FROM task WHERE status='done' AND deleted_at IS NULL AND parent_id IS NULL")
+      .get()?.n,
     overdue: db
       .prepare(
-        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND due_on IS NOT NULL AND due_on < ?"
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
       )
       .get(localDate())?.n,
     today: db
       .prepare(
-        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND due_on = ?"
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
       )
       .get(localDate())?.n,
   };
   return {
     today: localDate(),
     now: nowIso(),
-    version: '1.0.0',
+    version: VERSION,
     categories: cats,
     tags: T.listTags(db),
     counts: {
@@ -244,8 +262,32 @@ function focusPayload() {
 function completeFlow(id, doneNote = '') {
   return tx(db, () => {
     if (doneNote) T.patchTask(db, id, { doneNote });
+    // 每日/每周周期：不把活行标完成，而是留一条 done 历史行、让活行滚到下一期。
+    // 归档仍然照旧写到那一天的文件里，月索引、「已完成」视图完全不用改。
+    const before = T.getTask(db, id);
+    const series = before.series_id ? S.getSeries(db, before.series_id) : null;
+    if (series && series.rule !== 'monthly') {
+      const rolled = S.rollSeriesOccurrence(db, before);
+      let archive = { ok: false, skipped: true, reason: 'rolling' };
+      try {
+        const { rel } = A.writeTaskArchive(db, rolled.ghost, cfg.archiveRoot);
+        T.setArchivedPath(db, rolled.ghost.id, rel, null);
+        archive = { ok: true, path: rel };
+      } catch (err) {
+        T.setArchivedPath(db, rolled.ghost.id, null, String(err && err.message));
+        archive = { ok: false, error: String(err && err.message) };
+      }
+      return {
+        task: T.getTask(db, id),
+        repeated: { next: rolled.next, doneCount: rolled.doneCount, rule: series.rule },
+        archive,
+        ghost: { id: rolled.ghost.id, due_on: rolled.ghost.due_on, archived_path: archive.ok ? archive.path : null },
+      };
+    }
     const task = T.completeTask(db, id);
     if (task.status !== 'done') return { task, archive: { ok: false, skipped: true } };
+    // 子待办不单独归档：它的完成状态会随父任务的 md checklist 落盘
+    if (task.parent_id) return { task, archive: { ok: false, skipped: true, reason: 'child' } };
     try {
       const { rel } = A.writeTaskArchive(db, task, cfg.archiveRoot);
       T.setArchivedPath(db, id, rel, null);
@@ -269,7 +311,7 @@ async function handleApi(req, res, url) {
       ok: true,
       app: 'todo-workbench',
       instance: crypto.createHash('sha1').update(cfg.dbPath).digest('hex').slice(0, 12),
-      version: '1.0.0',
+      version: VERSION,
       db: cfg.dbPath,
       log: logPath(),
       pid: process.pid,
@@ -279,6 +321,24 @@ async function handleApi(req, res, url) {
   }
   if (method === 'GET' && pathname === '/api/bootstrap') return sendJson(res, 200, bootstrap());
   if (method === 'GET' && pathname === '/api/focus') return sendJson(res, 200, focusPayload());
+
+  // 到期提醒：抢占式返回，谁先抢到 remind_fired 谁负责弹通知，页面与托盘同时轮询也不会重复
+  if (method === 'GET' && pathname === '/api/reminders') {
+    const reminders = tx(db, () => T.claimDueReminders(db));
+    return sendJson(res, 200, {
+      reminders: reminders.map((r) => ({
+        id: r.id,
+        title: r.title,
+        priority: r.priority,
+        due_on: r.due_on,
+        due_time: r.due_time,
+        remind_at: r.remind_at,
+        late_min: r.late_min,
+        category_name: r.category_name || '未分类',
+      })),
+      now: nowIso(),
+    });
+  }
 
   if (method === 'GET' && pathname === '/api/tasks') {
     const { searchParams } = url;
@@ -292,6 +352,7 @@ async function handleApi(req, res, url) {
       q: searchParams.get('q') || undefined,
       due: searchParams.get('due') || undefined,
       doneOn,
+      parentId: searchParams.get('parent') || undefined,
       limit: Number(searchParams.get('limit') || 300),
     });
     return sendJson(res, 200, { tasks: decorateMany(rows), today: localDate() });
@@ -306,13 +367,31 @@ async function handleApi(req, res, url) {
     const span = Math.round((Date.parse(to + 'T00:00:00') - Date.parse(from + 'T00:00:00')) / 86400000);
     if (span > 62) throw new ApiError(400, 'BAD_RANGE', '日期区间最长 62 天');
     const counts = T.calendarCounts(db, from, to);
-    return sendJson(res, 200, { from, to, today: localDate(), ...counts });
+    // 格子里的条目：和 counts 同一口径，只多给「哪几条」，前端按需画 chip
+    const items = T.calendarItems(db, from, to);
+    // 每日/每周周期：把还没落成行的未来期虚拟补出来（纯读，不写库）
+    const virtuals = S.virtualOccurrences(db, from, to);
+    for (const v of virtuals) {
+      (items[v.due_on] || (items[v.due_on] = [])).push(v);
+    }
+    for (const day of Object.keys(items)) {
+      items[day].sort((a, b) => String(a.due_time || '99:99').localeCompare(String(b.due_time || '99:99')));
+    }
+    return sendJson(res, 200, { from, to, today: localDate(), ...counts, items });
   }
 
   if (method === 'POST' && pathname === '/api/tasks') {
     const body = await readBody(req);
     const created = T.createTask(db, body); // createTask 内部对例行系列自己开事务
     return sendJson(res, 201, created);
+  }
+
+  // 组内拖拽排序：整组顺序一次写回，避免逐条 PATCH 反复撞乐观锁。
+  // 必须排在 /api/tasks/:id 之前，否则会被当成 id='reorder' 的任务。
+  if (method === 'POST' && pathname === '/api/tasks/reorder') {
+    const body = await readBody(req);
+    const n = tx(db, () => T.reorderTasks(db, body.ids));
+    return sendJson(res, 200, { ok: true, updated: n });
   }
 
   // ---------- 每月例行系列 ----------
@@ -323,7 +402,11 @@ async function handleApi(req, res, url) {
     const id = seg[2];
     const sub = seg[3];
     if (!sub && method === 'GET') {
-      return sendJson(res, 200, { series: S.getSeries(db, id), tasks: S.seriesOccurrences(db, id) });
+      const series = S.getSeries(db, id);
+      return sendJson(res, 200, {
+        series: { ...series, rule_label: S.ruleLabel(series) },
+        tasks: S.seriesOccurrences(db, id),
+      });
     }
     if (!sub && method === 'PATCH') {
       const body = await readBody(req);
@@ -385,6 +468,23 @@ async function handleApi(req, res, url) {
     res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'no-store' });
     return res.end(briefingMarkdown());
   }
+  // 导出：参数与 GET /api/tasks 完全同构，页面筛什么就导什么
+  if (method === 'GET' && pathname === '/api/export.md') {
+    const { searchParams } = url;
+    const md = T.exportMarkdown(db, {
+      status: searchParams.get('status') || 'open',
+      categoryId: searchParams.get('category') || undefined,
+      tag: searchParams.get('tag') || undefined,
+      q: searchParams.get('q') || undefined,
+      due: searchParams.get('due') || undefined,
+    });
+    res.writeHead(200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-disposition': `attachment; filename="todo-${localDate()}.md"`,
+    });
+    return res.end(md);
+  }
   if (method === 'GET' && pathname === '/api/settings') return sendJson(res, 200, { settings: getSettings(db), archiveRoot: cfg.archiveRoot });
 
   if (method === 'POST' && pathname === '/api/categories') {
@@ -399,7 +499,11 @@ async function handleApi(req, res, url) {
     if (!sub) {
       if (method === 'GET') {
         const data = T.getTaskWithRelations(db, id);
-        return sendJson(res, 200, data);
+        // 子待办跟着父任务一起返回：详情面板一次拿全，不用再发一轮请求
+        const children = data.task.parent_id
+          ? []
+          : T.listTasks(db, { status: 'all', parentId: id, limit: 200 }).map(decorateOne);
+        return sendJson(res, 200, { ...data, children });
       }
       if (method === 'PATCH') {
         const body = await readBody(req);
@@ -635,7 +739,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         app: 'todo-workbench',
         instance: crypto.createHash('sha1').update(cfg.dbPath).digest('hex').slice(0, 12),
-        version: '1.0.0',
+        version: VERSION,
         db: cfg.dbPath,
         log: logPath(),
         pid: process.pid,

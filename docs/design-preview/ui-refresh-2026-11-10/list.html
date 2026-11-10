@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>提案 A · 全部待办（含选中态与分组阴影）</title>
+<link rel="stylesheet" href="proposal.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar" style="grid-column:1 / -1">
+    <div class="brand"><span class="brand-mark">✓</span>待办工作台</div>
+    <span class="today-chip">2026-11-10 周二</span>
+    <div class="search">搜索待办、分类、标签<kbd>Ctrl K</kbd></div>
+    <div class="top-actions">
+      <span class="tbtn">简报</span><span class="tbtn">备份</span><span class="tbtn">日历</span>
+      <span class="tbtn icon">◐</span><span class="tbtn icon">⚙</span>
+    </div>
+  </header>
+
+  <aside class="side">
+    <div class="side-group">
+      <div class="nav-item"><span class="ico">◎</span>聚焦<span class="cnt">8</span></div>
+      <div class="nav-item"><span class="ico">◉</span>今天<span class="cnt">4</span></div>
+      <div class="nav-item active"><span class="ico">≡</span>全部待办<span class="cnt">12</span></div>
+      <div class="nav-item"><span class="ico">↻</span>例行待办<span class="cnt">3</span></div>
+      <div class="nav-item"><span class="ico">✓</span>已完成<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="ico">▤</span>归档<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="ico">▦</span>统计</div>
+      <div class="nav-item"><span class="ico">⊞</span>日历</div>
+    </div>
+
+    <div class="side-group">
+      <div class="side-title"><span>分类</span><b>＋</b></div>
+      <div class="nav-item"><span class="dot" style="background:#8E8E93"></span>全部分类<span class="cnt">12</span></div>
+      <div class="nav-item"><span class="dot" style="background:#30B0C7"></span>物业运营<span class="cnt">3</span></div>
+      <div class="nav-item"><span class="dot" style="background:#5856D6"></span>合同与法务<span class="cnt">2</span></div>
+      <div class="nav-item"><span class="dot" style="background:#AF52DE"></span>制度与流程<span class="cnt">1</span></div>
+      <div class="nav-item"><span class="dot" style="background:#FF9500"></span>会议与汇报<span class="cnt">2</span></div>
+      <div class="nav-item"><span class="dot" style="background:#34C759"></span>行政事务<span class="cnt">3</span></div>
+      <div class="nav-item"><span class="dot" style="background:#FF2D55"></span>个人事项<span class="cnt">1</span></div>
+    </div>
+
+    <div class="side-group">
+      <div class="side-title"><span>例行待办</span><b>＋</b></div>
+      <div class="nav-item"><span class="dot" style="background:#007AFF"></span>每日：能耗读数<span class="cnt">每天</span></div>
+      <div class="nav-item"><span class="dot" style="background:#007AFF"></span>每周三：例会纪要<span class="cnt">每周三</span></div>
+    </div>
+
+    <div class="side-group">
+      <div class="side-title"><span>标签</span></div>
+      <div class="chips">
+        <span class="chip">#会议 1</span><span class="chip">#合同 2</span><span class="chip">#消防 2</span>
+        <span class="chip">#制度 1</span><span class="chip">#档案 1</span><span class="chip">#采购 1</span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="view-head">
+      <div>
+        <div class="view-title">全部待办</div>
+        <div class="view-sub">按段落看：置顶 → 逾期 → 今天 → 本周 → 本月 → 以后 → 无日期</div>
+      </div>
+      <div class="view-tools">
+        <div class="seg"><span class="on">智能</span><span>按到期</span><span>按优先级</span><span>按创建</span></div>
+        <span class="btn">导出</span>
+        <span class="btn primary">＋ 添加</span>
+      </div>
+    </div>
+
+    <div class="list-scroll">
+      <div class="section">
+        <div class="section-head pin"><h3>置顶</h3><span class="n">1</span><span class="hint">不参与到期排序</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">每周一晨会材料准备</span><span class="badges"><span class="flag">📌</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#FF9500"></span>会议与汇报</span><span class="prio p1">P1</span><span class="due today">今天</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>逾期</h3><span class="n">1</span><span class="hint">拖了很久</span></div>
+        <div class="card">
+          <div class="row overdue">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">确认 A 座消防年检整改回执并归档</span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#30B0C7"></span>物业运营</span><span class="prio p0">P0</span><span class="due over">逾期 2 天</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>今天</h3><span class="n">3</span><span class="hint">2026-11-10</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">把《会议室使用管理办法》定稿发全员</span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#AF52DE"></span>制度与流程</span><span class="prio p0">P0</span><span class="due today">今天</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">给物业群发本周值班表</span><span class="badges"><span class="b">⏰ 14:16</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#34C759"></span>行政事务</span><span class="prio p1">P1</span><span class="due today">今天</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+          <div class="row sel">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">核对消防维保合同续签条款</span><span class="badges"><span class="b">0/3</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#5856D6"></span>合同与法务</span><span class="prio p1">P1</span><span class="due today">今天</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>本周</h3><span class="n">2</span><span class="hint">7 天内到期</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">整理第三季度供应商评估表</span><span class="badges"><span class="b">1/2</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#34C759"></span>行政事务</span><span class="prio p1">P1</span><span class="due">11-13</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">每周三：物业例会纪要整理</span><span class="badges"><span class="b">↻</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#FF9500"></span>会议与汇报</span><span class="prio p2">P2</span><span class="due">11-11</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>本月</h3><span class="n">2</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">梳理档案室历史合同电子化清单</span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#5856D6"></span>合同与法务</span><span class="prio p2">P2</span><span class="due">11-22</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">每月 28 号提交月度总结</span><span class="badges"><span class="b">↻</span></span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#34C759"></span>行政事务</span><span class="prio p1">P1</span><span class="due">11-28</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>以后</h3><span class="n">1</span><span class="hint">12 月以后</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">更新应急预案联系人名单</span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#30B0C7"></span>物业运营</span><span class="prio p1">P1</span><span class="due">12-15</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>无日期</h3><span class="n">1</span><span class="hint">想清楚再排</span></div>
+        <div class="card">
+          <div class="row">
+            <span class="tick"></span>
+            <div class="rt"><span class="rt-text">月度办公用品采购比价</span></div>
+            <div class="meta"><span class="cat"><span class="dot" style="background:#34C759"></span>行政事务</span><span class="prio p2">P2</span><span class="due">无日期</span></div>
+            <div class="act"><i>📌</i><i>⋯</i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status">
+      <span>未完成 <b>12</b></span><span>逾期 <b style="color:var(--red)">1</b></span>
+      <span>今天到期 <b>3</b></span><span>已完成 <b>1</b></span>
+      <span class="kbd">N 新建 · Ctrl K 搜索 · ↑↓ 选择</span>
+    </div>
+  </main>
+
+  <aside class="detail">
+    <div class="d-head">
+      <div class="d-title">核对消防维保合同续签条款</div>
+      <div class="d-close">✕</div>
+    </div>
+    <div class="d-actions">
+      <span class="btn primary">✓ 完成并归档</span>
+      <span class="btn">📁 打开关联</span>
+      <span class="btn" style="color:var(--red)">删除</span>
+    </div>
+
+    <div class="d-sec">
+      <h4>安排</h4>
+      <div class="d-grid">
+        <div class="fld"><div class="k">分类</div><div class="v">合同与法务</div></div>
+        <div class="fld"><div class="k">优先级</div><div class="v" style="color:var(--orange);font-weight:600">P1 重要</div></div>
+        <div class="fld"><div class="k">截止日期</div><div class="v">2026/11/10 周二</div></div>
+        <div class="fld"><div class="k">时间</div><div class="v" style="color:var(--t3)">--:--</div></div>
+        <div class="fld wide"><div class="k">提醒</div><div class="v" style="color:var(--t3)">YYYY/MM/DD --:--</div></div>
+        <div class="fld"><div class="k">预估耗时</div><div class="v">30 分钟</div></div>
+      </div>
+    </div>
+
+    <div class="d-sec">
+      <h4>子待办 · 0/3</h4>
+      <div class="kid"><span class="tick"></span>确认服务范围是否含 A/B 座全部设备</div>
+      <div class="kid"><span class="tick"></span>比对上一版报价涨幅</div>
+      <div class="kid"><span class="tick"></span>盖章后回传对方专员</div>
+      <div class="kid-input">＋ 回车添加子待办</div>
+    </div>
+
+    <div class="d-sec">
+      <h4>备注</h4>
+      <div class="note">## 重点
+第 7 条免责范围和免租期表述要和上版逐字比对。
+
+## 待确认
+- 法务是否已审核附件二</div>
+    </div>
+
+    <div class="d-sec">
+      <h4>标签</h4>
+      <div class="chips"><span class="chip">#合同 ✕</span><span class="chip">#消防 ✕</span><span class="chip">＋ 回车加标签</span></div>
+    </div>
+  </aside>
+</div>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>提案 C · 配色、阴影与列表状态</title>
+<link rel="stylesheet" href="proposal.css">
+<style>
+  html, body { height: 1020px; }
+  .doc { height: 1020px; padding: 30px 44px; }
+  .doc h2 { margin: 20px 0 10px; }
+  .sw .bar { height: 46px; }
+  .lead2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+  .bad { background: #fff; border-radius: 14px; box-shadow: var(--sh-1); padding: 10px 0 6px; border: 1px dashed rgba(255,59,48,.35); }
+  .bad .cap2 { font-size: 10.5px; color: #C22B22; letter-spacing: .4px; padding: 0 14px 6px; }
+  .flatrow { display: flex; align-items: center; gap: 10px; padding: 9px 14px; font-size: 13.5px; background: #fff; border-bottom: 1px solid #E9ECEF; }
+  .flatrow:last-child { border-bottom: 0; }
+  .flatrow.sel { background: #E7F0FE; }
+  .flatrow.sel .tx { color: #1A3E72; }
+  .flatrow .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flatrow .tk { width: 17px; height: 17px; border-radius: 50%; border: 1.5px solid rgba(60,60,67,.25); }
+  .mini { font-size: 11px; color: var(--t3); }
+</style>
+</head>
+<body>
+<div class="doc">
+  <h1>UI 改版提案 · iOS 风配色与分界</h1>
+  <div class="lede">目标：配色收敛到 iOS 系统色；板块之间用「卡片 + 阴影 + 发丝线」三层区分；列表条目任何状态都有清晰边界；日历按 iOS 原生日历的留白与圆点逻辑重做。</div>
+
+  <h2>1 · 系统色板（全部取自 iOS 系统色，暗色模式自动换对应色）</h2>
+  <div class="swatches">
+    <div class="sw"><div class="bar" style="background:#F2F2F7;border-bottom:1px solid rgba(60,60,67,.12)"></div><div class="cap"><b>页面底色 F2F2F7</b>systemGroupedBackground</div></div>
+    <div class="sw"><div class="bar" style="background:#FFFFFF;border-bottom:1px solid rgba(60,60,67,.12)"></div><div class="cap"><b>卡片 FFFFFF</b>分组内容面</div></div>
+    <div class="sw"><div class="bar" style="background:#1C1C1E"></div><div class="cap"><b>主文字 1C1C1E</b>标题 / 待办正文</div></div>
+    <div class="sw"><div class="bar" style="background:#007AFF"></div><div class="cap"><b>强调 007AFF</b>选中 / 主按钮 / 今天</div></div>
+    <div class="sw"><div class="bar" style="background:#FF3B30"></div><div class="cap"><b>红 FF3B30</b>逾期 / P0 / 删除</div></div>
+    <div class="sw"><div class="bar" style="background:#FF9500"></div><div class="cap"><b>橙 FF9500</b>今天到期 / P1</div></div>
+    <div class="sw"><div class="bar" style="background:#34C759"></div><div class="cap"><b>绿 34C759</b>完成 / 行政类</div></div>
+    <div class="sw"><div class="bar" style="background:#AF52DE"></div><div class="cap"><b>紫 AF52DE</b>制度 / P3 辅助</div></div>
+    <div class="sw"><div class="bar" style="background:#5856D6"></div><div class="cap"><b>靛 5856D6</b>合同 / 例行标记</div></div>
+    <div class="sw"><div class="bar" style="background:#30B0C7"></div><div class="cap"><b>青 30B0C7</b>物业 / 信息类</div></div>
+    <div class="sw"><div class="bar" style="background:#FF2D55"></div><div class="cap"><b>玫红 FF2D55</b>个人事项</div></div>
+    <div class="sw"><div class="bar" style="background:#8E8E93"></div><div class="cap"><b>灰 8E8E93</b>未分类 / 次要</div></div>
+  </div>
+
+  <h2>2 · 三层分界：面板阴影 → 分组卡片阴影 → 行内发丝线</h2>
+  <div class="shadow-demo">
+    <div class="sh-card" style="box-shadow:var(--sh-1)">sh-1 · 输入框 / 32px 控件</div>
+    <div class="sh-card" style="box-shadow:var(--sh-2)">sh-2 · 分组卡片（每段一块，段间 16px 留白）</div>
+    <div class="sh-card" style="box-shadow:var(--sh-3)">sh-3 · 日历整卡 / 浮层</div>
+    <div class="sh-card" style="box-shadow:8px 0 26px -18px rgba(16,24,40,.4)">侧栏右缘 8/26 投影</div>
+    <div class="sh-card" style="box-shadow:-8px 0 26px -18px rgba(16,24,40,.4)">详情左缘 -8/26 投影</div>
+  </div>
+
+  <h2>3 · 列表条目状态对照（左：现在的问题；右：提案）</h2>
+  <div class="lead2">
+    <div class="bad">
+      <div class="cap2">现在 · 行是透明底、无边框无阴影；选中只是把底色刷成 #E7F0FE，比背景只深一点点，看着像没选中</div>
+      <div class="flatrow"><span class="tk"></span><span class="tx">确认 A 座消防年检整改回执并归档</span><span class="mini">逾期 2 天</span></div>
+      <div class="flatrow"><span class="tk"></span><span class="tx">把《会议室使用管理办法》定稿发全员</span><span class="mini">今天</span></div>
+      <div class="flatrow sel"><span class="tk"></span><span class="tx">核对消防维保合同续签条款</span><span class="mini">今天</span></div>
+      <div class="flatrow"><span class="tk"></span><span class="tx">整理第三季度供应商评估表</span><span class="mini">11-13</span></div>
+    </div>
+
+    <div class="state-card">
+      <div class="state-cap">提案 · 一致的 1px 发丝线 + 选中态 1.5px 蓝描边 + 左侧 3px 蓝条 + 16%→3% 蓝底渐变</div>
+      <div class="row"><span class="tick"></span><div class="rt"><span class="rt-text">确认 A 座消防年检整改回执并归档</span></div><div class="meta"><span class="prio p0">P0</span><span class="due over">逾期 2 天</span></div></div>
+      <div class="row hover"><span class="tick"></span><div class="rt"><span class="rt-text">把《会议室使用管理办法》定稿发全员</span></div><div class="meta"><span class="prio p0">P0</span><span class="due today">今天</span></div><div class="act" style="opacity:1"><i>📌</i><i>⋯</i></div></div>
+      <div class="row sel"><span class="tick"></span><div class="rt"><span class="rt-text">核对消防维保合同续签条款</span><span class="badges"><span class="b">0/3</span></span></div><div class="meta"><span class="prio p1">P1</span><span class="due today">今天</span></div></div>
+      <div class="row"><span class="tick"></span><div class="rt"><span class="rt-text">整理第三季度供应商评估表</span><span class="badges"><span class="b">1/2</span></span></div><div class="meta"><span class="prio p1">P1</span><span class="due">11-13</span></div></div>
+      <div class="row done"><span class="tick">✓</span><div class="rt"><span class="rt-text" style="text-decoration:line-through;color:var(--t3)">每日：记录当天能耗读数（11-10）</span></div><div class="meta"><span class="due">已完成</span></div></div>
+    </div>
+  </div>
+
+  <h2>4 · 其余三处改动</h2>
+  <div class="notes">
+    <div><b>日历</b><br>去掉格子边框的硬线，改 1px 7% 灰发丝线；今天＝实心蓝圆、完成＝右上角绿色 ✓n、逾期格 4.5% 红底、非本月 26% 透明；条目＝4px 圆角色块 + 5px 圆点 + 11px 字，最多 2 条 + 「还有 N 条」；例行未来期用虚线灰条。</div>
+    <div><b>层级与密度</b><br>主标题 26px / 行标题 14.5px / 元信息 12px；行内边距 10×14、行高 40；分组头 13px 半粗 + 计数胶囊；段间距 16px，让「每一段」自己站起来。</div>
+    <div><b>改名</b><br>「重复」→「例行待办」（侧栏、视图标题、详情段、提示文案、README 同步）。原「每月例行」入口已经有这个名字，正好把三档（每月 / 每天 / 每周）都装进去。</div>
+  </div>
+</div>
+</body>
+</html>

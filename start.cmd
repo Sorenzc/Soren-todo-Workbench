@@ -5,6 +5,11 @@ cd /d "%~dp0"
 
 rem NOTE: keep this file ASCII-only. cmd.exe parses .cmd byte-wise, so Chinese
 rem text here gets mangled into commands unless the whole file is ANSI-encoded.
+rem
+rem This window is only a launcher: it starts the server in the background,
+rem then closes itself. The workbench keeps running after this window is gone.
+rem To stop it: tray icon (packaged build) or  taskkill /fi "imagename eq node.exe"
+rem or  taskkill /pid <pid from data\server.pid>
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -36,12 +41,15 @@ if %NODE_MAJOR% LSS 22 (
 )
 
 echo Starting workbench...
-echo Your browser will open automatically.
-echo Closing this window stops the workbench; your data stays in workbench\data.
-echo.
-node src\server.mjs
+node scripts\launch.mjs
 if errorlevel 1 (
   echo.
-  echo Startup failed. Send the error above to whoever maintains this copy.
+  echo Startup failed - see data\server.log for details.
   pause
+  exit /b 1
 )
+
+rem Successful start: the server now runs detached, the browser is opening.
+rem Give the message half a second to be readable, then close this window.
+ping -n 2 127.0.0.1 >nul 2>nul
+exit /b 0

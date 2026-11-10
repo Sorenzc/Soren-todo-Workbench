@@ -31,6 +31,14 @@ function ok(name, cond, extra) {
   return false;
 }
 
+// 本地日期加减（别用 toISOString，UTC 会差一天）
+function addDaysLocal(ymd, n) {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const p = (v) => String(v).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function readToken() {
   const f = path.join(root, 'data', 'token.txt');
   return fs.readFileSync(f, 'utf8').trim();
@@ -97,6 +105,7 @@ function cleanup() {
 /* ------------------------------ 主流程 ------------------------------ */
 const createdTasks = [];
 const createdCats = [];
+const createdSeries = [];
 
 async function main() {
   if (!base) await startServer();
@@ -364,8 +373,240 @@ async function main() {
   const gone = await api('GET', `/api/series/${r31.data.series.id}`);
   ok('删系列时把它的期一起清掉', gone.status === 404, String(gone.status));
 
+  // ---- 子待办 ----
+  const parentTitle = '冒烟：父任务 ' + Date.now();
+  const parentRes = await api('POST', '/api/tasks', { title: parentTitle, priority: 1 });
+  const parentId = parentRes.data?.task?.id;
+  if (parentId) createdTasks.push(parentId);
+  ok('父任务能创建', parentRes.status === 201 && Boolean(parentId), String(parentRes.status));
+  const kid1 = await api('POST', '/api/tasks', { title: '冒烟：子项 A ' + Date.now(), parentId });
+  const kid2 = await api('POST', '/api/tasks', { title: '冒烟：子项 B ' + Date.now(), parentId });
+  const kid1Id = kid1.data?.task?.id;
+  if (kid1Id) createdTasks.push(kid1Id);
+  if (kid2.data?.task?.id) createdTasks.push(kid2.data.task.id);
+  ok('子待办挂到父任务', kid1.status === 201 && kid1.data?.task?.parent_id === parentId && kid2.status === 201);
+  ok('父行带子项进度', kid1.data?.task?.child_count === 0, String(kid1.data?.task?.child_count));
+
+  const kidSearch = await api('GET', `/api/tasks?status=all&limit=200&q=${encodeURIComponent('冒烟：子项')}`);
+  ok('列表默认不返回子项', (kidSearch.data.tasks || []).length === 0, String((kidSearch.data.tasks || []).length));
+
+  const parentDetail = await api('GET', `/api/tasks/${parentId}`);
+  ok('详情带 children', (parentDetail.data?.children || []).length === 2, String((parentDetail.data?.children || []).length));
+
+  const grandKid = await api('POST', '/api/tasks', { title: '冒烟：孙项', parentId: kid1Id });
+  ok('子待办下不能再挂子待办（400）', grandKid.status === 400, String(grandKid.status));
+  const kidRecur = await api('POST', '/api/tasks', {
+    title: '冒烟：子项带例行',
+    parentId,
+    recurrence: { rule: 'monthly', day_of_month: 1 },
+  });
+  ok('子待办不能同时开例行（400）', kidRecur.status === 400, String(kidRecur.status));
+
+  // 删父连带软删子项，恢复父时子项一起回来
+  await api('DELETE', `/api/tasks/${parentId}`);
+  const kidAfterDel = await api('GET', `/api/tasks/${kid1Id}`);
+  ok('删父连带软删子项', kidAfterDel.status === 404, String(kidAfterDel.status));
+  await api('POST', `/api/tasks/${parentId}/restore`, {});
+  const kidBack = await api('GET', `/api/tasks/${kid1Id}`);
+  ok('恢复父把子项一起找回', kidBack.status === 200, String(kidBack.status));
+
+  // ---- 到期提醒 ----
+  const localMinute = (ms) => {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const remindAt = localMinute(Date.now() - 60000);
+  const tRemind = await api('POST', '/api/tasks', { title: '冒烟：提醒到期 ' + Date.now(), remindAt });
+  const remindId = tRemind.data?.task?.id;
+  if (remindId) createdTasks.push(remindId);
+  ok('提醒时间能存下来', tRemind.data?.task?.remind_at === remindAt, String(tRemind.data?.task?.remind_at));
+  const badRemind = await api('POST', '/api/tasks', { title: '冒烟：坏提醒', remindAt: '2026-13-45T99:99' });
+  ok('非法提醒时间被拒（400）', badRemind.status === 400, String(badRemind.status));
+
+  // 迟到 3 小时的只标记不补发
+  const staleAt = localMinute(Date.now() - 3 * 3600 * 1000);
+  const tStale = await api('POST', '/api/tasks', { title: '冒烟：过时提醒 ' + Date.now(), remindAt: staleAt });
+  const staleId = tStale.data?.task?.id;
+  if (staleId) createdTasks.push(staleId);
+
+  const r1 = await api('GET', '/api/reminders');
+  const r1ids = (r1.data?.reminders || []).map((x) => x.id);
+  ok('到期提醒被领取', r1.status === 200 && r1ids.includes(remindId), JSON.stringify(r1ids));
+  ok('迟到太久的提醒不补发', !r1ids.includes(staleId), JSON.stringify(r1ids));
+  const r2 = await api('GET', '/api/reminders');
+  ok('同一条提醒不会重复领', !(r2.data?.reminders || []).some((x) => x.id === remindId), JSON.stringify(r2.data?.reminders));
+  const staleRow = await api('GET', `/api/tasks/${staleId}`);
+  ok('迟到的提醒只标记已发', staleRow.data?.task?.remind_fired === 1, String(staleRow.data?.task?.remind_fired));
+
+  // 改提醒时间要重新武装
+  const remindAt2 = localMinute(Date.now() - 60000);
+  await api('PATCH', `/api/tasks/${staleId}`, { patch: { remindAt: remindAt2 } });
+  const r3 = await api('GET', '/api/reminders');
+  ok('改了提醒时间能再领一次', (r3.data?.reminders || []).some((x) => x.id === staleId), JSON.stringify(r3.data?.reminders));
+
+  // ---- 父任务完成：子项级联 + 归档 checklist ----
+  const doneParent = await api('POST', `/api/tasks/${parentId}/complete`, { done_note: '冒烟父任务完成' });
+  ok('父任务完成', doneParent.status === 200 && doneParent.data?.task?.status === 'done', String(doneParent.status));
+  const parentAfter = await api('GET', `/api/tasks/${parentId}`);
+  const kidsAfter = parentAfter.data?.children || [];
+  ok('勾父带子：子项全部完成', kidsAfter.length === 2 && kidsAfter.every((k) => k.status === 'done'), JSON.stringify(kidsAfter.map((k) => k.status)));
+  ok('子项完成不单独归档', kidsAfter.every((k) => !k.archived_path), JSON.stringify(kidsAfter.map((k) => k.archived_path)));
+  const archiveRel = doneParent.data?.task?.archived_path || '';
+  ok('父任务写出归档文件', Boolean(archiveRel), archiveRel);
+  let mdText = '';
+  try {
+    mdText = fs.readFileSync(path.join(root, 'archive', (archiveRel || '').split('/').join(path.sep)), 'utf8');
+  } catch {
+    mdText = '';
+  }
+  ok('归档 md 带子项 checklist', /## 子项/.test(mdText) && /- \[x\] 冒烟：子项 A/.test(mdText), mdText.slice(0, 120));
+  ok('归档 md 表头记子项进度', /\| 子项 \| 2\/2/.test(mdText), mdText.slice(0, 200));
+
+  // ---- 置顶 / 组内排序 / 导出 / 日历条目 ----
+  const canPin1 = await api('POST', '/api/tasks', { title: '冒烟：排序甲', dueOn: '2030-03-03', priority: 3 });
+  const canPin2 = await api('POST', '/api/tasks', { title: '冒烟：排序乙', dueOn: '2030-03-03', priority: 3 });
+  const pinA = canPin1.data?.task?.id;
+  const pinB = canPin2.data?.task?.id;
+  if (pinA) createdTasks.push(pinA);
+  if (pinB) createdTasks.push(pinB);
+  ok('置顶字段默认是 0', canPin1.data?.task?.pinned === 0, String(canPin1.data?.task?.pinned));
+
+  const pinnedAt = await api('PATCH', `/api/tasks/${pinB}`, { patch: { pinned: true } });
+  ok('能置顶', pinnedAt.status === 200 && pinnedAt.data?.task?.pinned === 1, String(pinnedAt.data?.task?.pinned));
+  const afterPin = await api('GET', `/api/tasks?status=open&limit=50`);
+  const order1 = (afterPin.data?.tasks || []).map((t) => t.id);
+  ok('置顶排在同类前面', order1.indexOf(pinB) >= 0 && order1.indexOf(pinB) < order1.indexOf(pinA), JSON.stringify(order1.slice(0, 6)));
+
+  // 取消置顶后再比手动排序：sort_order 大的在前
+  await api('PATCH', `/api/tasks/${pinB}`, { patch: { pinned: false } });
+  const reorder1 = await api('POST', '/api/tasks/reorder', { ids: [pinA, pinB] });
+  ok('排序接口接受一组 id', reorder1.status === 200 && reorder1.data?.updated === 2, JSON.stringify(reorder1.data));
+  const afterOrder = await api('GET', `/api/tasks?status=open&limit=50`);
+  const order2 = (afterOrder.data?.tasks || []).map((t) => t.id);
+  ok('手动顺序生效（甲在乙前）', order2.indexOf(pinA) < order2.indexOf(pinB), JSON.stringify(order2.slice(0, 6)));
+
+  const reorder2 = await api('POST', '/api/tasks/reorder', { ids: [pinB, pinA] });
+  ok('反向再排一次', reorder2.status === 200, JSON.stringify(reorder2.data));
+  const afterOrder2 = await api('GET', `/api/tasks?status=open&limit=50`);
+  const order3 = (afterOrder2.data?.tasks || []).map((t) => t.id);
+  ok('手动顺序可翻转（乙在甲前）', order3.indexOf(pinB) < order3.indexOf(pinA), JSON.stringify(order3.slice(0, 6)));
+
+  ok('空 ids 被拒', (await api('POST', '/api/tasks/reorder', { ids: [] })).status === 400);
+  ok('不存在的 id 被拒', (await api('POST', '/api/tasks/reorder', { ids: ['no-such-task'] })).status === 400);
+  ok('重复 id 被拒', (await api('POST', '/api/tasks/reorder', { ids: [pinA, pinA] })).status === 400);
+
+  // 导出：和列表同一筛选口径
+  const exportRes = await fetch(`${base}/api/export.md?status=open&q=${encodeURIComponent('冒烟：排序')}`, {
+    headers: { 'x-wb-token': token },
+  });
+  const exportMd = await exportRes.text();
+  ok('导出返回 markdown', exportRes.status === 200 && /text\/markdown/.test(exportRes.headers.get('content-type') || ''), exportRes.headers.get('content-type'));
+  ok('导出内容跟随筛选', exportMd.includes('冒烟：排序甲') && exportMd.includes('冒烟：排序乙'), exportMd.slice(0, 160));
+  ok('导出带勾选框与表头', /^# 待办清单/m.test(exportMd) && /- \[ \] 冒烟：排序甲/.test(exportMd), exportMd.slice(0, 120));
+
+  // 日历条目：同一天的任务要能取到 chip 数据
+  const calFrom = '2030-03-01';
+  const calTo = '2030-03-07';
+  const calMonth = await api('GET', `/api/calendar?from=${calFrom}&to=${calTo}`);
+  const calItems = calMonth.data?.items?.['2030-03-03'] || [];
+  ok('日历返回格子条目', calMonth.status === 200 && calItems.some((t) => t.id === pinA), JSON.stringify(calItems.map((t) => t.title)));
+  ok('日历条目带分类与子项字段', calItems.every((t) => 'category_name' in t && 'child_count' in t), JSON.stringify(calItems[0] || {}));
+  ok('日历仍返回计数', (calMonth.data?.days || {})['2030-03-03'] >= 2, JSON.stringify(calMonth.data?.days));
+
+  // 拖 chip 改期走的是普通 PATCH dueOn
+  const moved = await api('PATCH', `/api/tasks/${pinA}`, { patch: { dueOn: '2030-03-05' } });
+  ok('改期成功', moved.status === 200 && moved.data?.task?.due_on === '2030-03-05', moved.data?.task?.due_on);
+
+  // ---- 每日 / 每周：单行滚动 ----
+  const dailyTitle = '冒烟：每日滚动 ' + Date.now();
+  const daily = await api('POST', '/api/tasks', {
+    title: dailyTitle,
+    recurrence: { rule: 'daily', start_date: today, interval_n: 1 },
+  });
+  const dailySeriesId = daily.data?.series?.id;
+  if (dailySeriesId) createdSeries.push(dailySeriesId);
+  ok('每日重复只建一条活行', daily.status === 201 && daily.data?.seriesOccurrences === 1, JSON.stringify(daily.data?.seriesOccurrences));
+  ok('活行日期就是起始日', daily.data?.task?.due_on === today, daily.data?.task?.due_on);
+  ok('每日系列的规则文案', daily.data?.series?.rule_label === '每天', String(daily.data?.series?.rule_label));
+  const dailyLiveId = daily.data?.task?.id;
+  if (dailyLiveId) createdTasks.push(dailyLiveId);
+
+  const dailyDone = await api('POST', `/api/tasks/${dailyLiveId}/complete`, {});
+  const nextDate = dailyDone.data?.repeated?.next;
+  ok('完成一期会滚到下一期', Boolean(nextDate) && nextDate > today, String(nextDate));
+  ok('活行日期推进到下一期', dailyDone.data?.task?.due_on === nextDate, dailyDone.data?.task?.due_on);
+  ok('活行仍然是待办', dailyDone.data?.task?.status === 'open', dailyDone.data?.task?.status);
+  ok('这一期变成历史行并归档', Boolean(dailyDone.data?.ghost?.id) && Boolean(dailyDone.data?.ghost?.archived_path), JSON.stringify(dailyDone.data?.ghost));
+  const ghostId = dailyDone.data?.ghost?.id;
+  const dailySeries1 = await api('GET', `/api/series/${dailySeriesId}`);
+  ok('系列累计滚了 1 轮', dailySeries1.data?.series?.repeat_done_count === 1, String(dailySeries1.data?.series?.repeat_done_count));
+  ok('系列下一期同步', dailySeries1.data?.series?.next_on === nextDate, String(dailySeries1.data?.series?.next_on));
+  const dailyOcc = dailySeries1.data?.tasks || [];
+  ok('系列里是活行 + 一条历史行', dailyOcc.length === 2 && dailyOcc.filter((t) => t.status === 'done').length === 1, JSON.stringify(dailyOcc.map((t) => `${t.status}:${t.due_on}`)));
+
+  const dailyDone2 = await api('POST', `/api/tasks/${dailyLiveId}/complete`, {});
+  ok('连续完成第二轮', dailyDone2.data?.repeated?.doneCount === 2 && dailyDone2.data?.repeated?.next > nextDate, JSON.stringify(dailyDone2.data?.repeated));
+
+  // 历史行重新打开：滚动系列会断开，不能变成第二条活行
+  const reopened = await api('POST', `/api/tasks/${ghostId}/reopen`, {});
+  ok('历史行可以重新打开', reopened.status === 200 && reopened.data?.task?.status === 'open', reopened.data?.task?.status);
+  ok('重新打开后脱离系列', reopened.data?.task?.series_id === null, String(reopened.data?.task?.series_id));
+  if (reopened.data?.task?.id) createdTasks.push(reopened.data.task.id);
+
+  // 每 2 天 + 每周
+  const daily2 = await api('POST', '/api/tasks', {
+    title: '冒烟：每两天 ' + Date.now(),
+    recurrence: { rule: 'daily', start_date: today, interval_n: 2 },
+  });
+  if (daily2.data?.series?.id) createdSeries.push(daily2.data.series.id);
+  ok('每 2 天的文案', daily2.data?.series?.rule_label === '每 2 天', String(daily2.data?.series?.rule_label));
+  if (daily2.data?.task?.id) createdTasks.push(daily2.data.task.id);
+  const daily2Done = await api('POST', `/api/tasks/${daily2.data.task.id}/complete`, {});
+  const expect2 = addDaysLocal(today, 2);
+  ok('每 2 天跳 2 天', daily2Done.data?.repeated?.next === expect2, `${daily2Done.data?.repeated?.next} vs ${expect2}`);
+
+  const weekTitle = '冒烟：每周 ' + Date.now();
+  const weekly = await api('POST', '/api/tasks', {
+    title: weekTitle,
+    recurrence: { rule: 'weekly', start_date: today, interval_n: 1, weekday: 0 },
+  });
+  if (weekly.data?.series?.id) createdSeries.push(weekly.data.series.id);
+  if (weekly.data?.task?.id) createdTasks.push(weekly.data.task.id);
+  const monday = weekly.data?.task?.due_on || '';
+  ok('每周重复从周一开始', monday && (new Date(`${monday}T00:00:00`).getDay() + 6) % 7 === 0, monday);
+  ok('每周的文案', String(weekly.data?.series?.rule_label || '').startsWith('每周'), String(weekly.data?.series?.rule_label));
+  ok('每周系列一条活行', weekly.data?.seriesOccurrences === 1, String(weekly.data?.seriesOccurrences));
+
+  // 非法参数
+  ok('间隔 0 被拒（400）', (await api('POST', '/api/tasks', { title: '冒烟：坏间隔', recurrence: { rule: 'daily', interval_n: 0 } })).status === 400);
+  ok('间隔 61 被拒（400）', (await api('POST', '/api/tasks', { title: '冒烟：坏间隔', recurrence: { rule: 'weekly', interval_n: 61 } })).status === 400);
+  ok('未知规则被拒（400）', (await api('POST', '/api/tasks', { title: '冒烟：坏规则2', recurrence: { rule: 'weird' } })).status === 400);
+
+  // 日历虚拟展开：未来的期只出现在日历里，不是真的任务行
+  const winFrom = today;
+  const winTo = addDaysLocal(today, 20);
+  const calDaily = await api('GET', `/api/calendar?from=${winFrom}&to=${winTo}`);
+  const virt = Object.values(calDaily.data?.items || {}).flat().filter((t) => t.virtual);
+  ok('日历里有周期虚拟条目', virt.some((t) => t.series_id === dailySeriesId), JSON.stringify(virt.map((t) => `${t.due_on}:${t.id}`)));
+  ok('虚拟条目不可当任务打开（id 带 virt: 前缀）', virt.every((t) => String(t.id).startsWith('virt:')), String(virt[0]?.id));
+  ok('虚拟条目不进待办列表', ((await api('GET', `/api/tasks?status=all&limit=500&q=${encodeURIComponent(dailyTitle)}`)).data.tasks || []).every((t) => !String(t.id).startsWith('virt:')));
+
+  // 滚动系列取消 / 恢复
+  const rollCancel = await api('POST', `/api/series/${weekly.data.series.id}/cancel`, {});
+  ok('滚动系列能取消', rollCancel.status === 200, String(rollCancel.status));
+  const weeklyOpen = await api('GET', `/api/tasks?status=open&limit=200&q=${encodeURIComponent(weekTitle)}`);
+  ok('取消后活行不在待办里', (weeklyOpen.data.tasks || []).length === 0, String((weeklyOpen.data.tasks || []).length));
+  const rollResume = await api('POST', `/api/series/${weekly.data.series.id}/resume`, {});
+  ok('滚动系列能恢复', rollResume.status === 200, String(rollResume.status));
+  const weeklyBack = await api('GET', `/api/tasks?status=open&limit=200&q=${encodeURIComponent(weekTitle)}`);
+  ok('恢复后活行回来且日期不早于今天', (weeklyBack.data.tasks || []).length === 1 && weeklyBack.data.tasks[0].due_on >= today, JSON.stringify((weeklyBack.data.tasks || []).map((t) => t.due_on)));
+
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);
+  for (const sid of createdSeries) {
+    try { await api('DELETE', `/api/series/${sid}`); } catch { /* ignore */ }
+  }
   if (catId) await api('DELETE', `/api/categories/${catId}`);
   for (const id of createdTasks) {
     try {
@@ -401,6 +642,22 @@ async function main() {
         }
       }
     }
+  } catch {
+    /* ignore */
+  }
+  // 兜底：直接扫归档目录，删掉文件名里带「冒烟」的孤儿 md（滚动系列的历史行会被系列删除带走，
+  // 但已经写出的归档文件不会跟着删，上面的按 DB 遍历收不到它们）
+  try {
+    const walk = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const name of fs.readdirSync(dir)) {
+        const p = path.join(dir, name);
+        const st = fs.statSync(p);
+        if (st.isDirectory()) walk(p);
+        else if (name.endsWith('.md') && name.includes('冒烟')) fs.rmSync(p, { force: true });
+      }
+    };
+    walk(path.join(root, 'archive'));
   } catch {
     /* ignore */
   }

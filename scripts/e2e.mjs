@@ -374,7 +374,7 @@ async function main() {
       title: document.getElementById('viewTitle')?.textContent || '',
       rows: [...document.querySelectorAll('.series-row')].map((n) => n.textContent.replace(/\\s+/g, ' ').trim()),
     }))()`);
-    ok('例行页标题正确', seriesPage.title.includes('例行'), seriesPage.title);
+    ok('例行页标题正确', seriesPage.title.includes('例行待办'), seriesPage.title);
     ok('例行页列出这个系列', seriesPage.rows.some((r) => r.includes(seriesTitle) && r.includes('每月 28 号')), seriesPage.rows.join(' || '));
 
     // 从例行页打开某一期，详情里能看到「每月例行」回溯入口

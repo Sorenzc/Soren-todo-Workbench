@@ -30,6 +30,16 @@ function clickFirstRow() {
   if (!row) throw new Error('没有可点击的任务行');
   row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
+// 选中「一张多行卡片里的第一行」，用来看选中描边在卡片上方圆角处有没有被裁
+function clickCardFirstRow() {
+  const rows = [...document.querySelectorAll('.list .row')];
+  const multi = rows.find((r) => {
+    const card = r.closest('.card');
+    return card && card.querySelectorAll('.row').length >= 2;
+  }) || rows[0];
+  if (!multi) throw new Error('没有可点击的任务行');
+  multi.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
 function openPalette() {
   // app.js 的快捷键监听挂在 document 上，派发到 window 收不到
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
@@ -51,7 +61,7 @@ function clickPaletteCommand() {
 
 function openNewTaskRecur() {
   const btn = document.getElementById('btnAddSeries');
-  if (!btn) throw new Error('侧栏没有「新建每月例行」按钮');
+  if (!btn) throw new Error('侧栏没有「新建例行」按钮');
   btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   const t = document.getElementById('tmTitle');
   if (t) {
@@ -112,7 +122,9 @@ const SCENARIOS = {
   day: { url: '/?view=day', desc: '某一天：当天完成' },
   dayDue: { url: '/?view=day&mode=due', desc: '某一天：当天到期' },
   calendar: { url: '/', desc: '月历浮层', steps: [openCalendar] },
+  calView: { url: '/?view=calendar', desc: '日历视图（整月格子 + 条目）' },
   detail: { url: '/', desc: '打开详情面板', steps: [clickFirstRow] },
+  detailEdge: { url: '/?view=today', desc: '选中多行卡片的第一行（圆角描边）', steps: [clickCardFirstRow] },
   palette: { url: '/', desc: '命令面板', steps: [openPalette] },
   settings: { url: '/', desc: '设置弹窗', steps: [openSettings, clickPaletteCommand] },
   narrow: { url: '/', desc: '窄屏（900px）', width: 900 },
@@ -123,8 +135,8 @@ const SCENARIOS = {
   newTaskNarrow: { url: '/', desc: '新建待办（窄屏）', width: 900, steps: [openNewTask, fillNewTask] },
   contact: { url: '/', desc: '联系作者二维码', steps: [openContact] },
   reward: { url: '/', desc: '激励作者收款码', steps: [openReward] },
-  newTaskRecur: { url: '/', desc: '新建待办：每月例行', steps: [openNewTaskRecur, pick28] },
-  series: { url: '/?view=series', desc: '每月例行列表' },
+  newTaskRecur: { url: '/', desc: '新建待办：例行待办（每月某日）', steps: [openNewTaskRecur, pick28] },
+  series: { url: '/?view=series', desc: '例行待办列表' },
 };
 
 async function main() {

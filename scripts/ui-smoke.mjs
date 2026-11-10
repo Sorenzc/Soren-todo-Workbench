@@ -291,8 +291,10 @@ const ctx = vm.createContext(sandbox);
 
 /* ------------------------------ 执行 app.js ------------------------------ */
 let failures = 0;
+let checks = 0;
 function check(name, cond, detail = '') {
   const ok = Boolean(cond);
+  checks++;
   if (!ok) failures++;
   console.log(`${ok ? '  ✓' : '  ✗'} ${name}${ok ? '' : '  ← ' + detail}`);
 }
@@ -322,8 +324,9 @@ try {
   check('全部待办可渲染', allRows.length > 0, `rows=${allRows.length}`);
   check('侧栏分类计数已渲染', documentElement.querySelectorAll('.cat-item').length >= 8, String(documentElement.querySelectorAll('.cat-item').length));
 
-  // 选中第一条 → 详情
-  const firstTitle = allRows[0].querySelector('.row-title').textContent;
+  // 选中第一条 → 详情（行标题后面会跟 📌/⏰/↻ 和子项进度这类小标，比较标题时先去掉）
+  const firstTitle = (allRows[0].querySelector('.row-title').textContent || '')
+    .replace(/[📌⏰↻]/g, '').replace(/\s*\d+\/\d+\s*$/, '').trim();
   allRows[0].dispatchEvent({ type: 'click', bubbles: true });
   await sleep(800);
   const detail = $('.detail');
@@ -605,6 +608,191 @@ try {
     await fetch(BASE + `/api/tasks/${probe.id}/purge`, { method: 'POST', headers: { 'x-wb-token': token, 'content-type': 'application/json' }, body: '{}' });
   }
 
+  // ---- v1.2 引擎：子待办 / 提醒 / 序号拆条 / 逾期一键 ----
+  const mkApi = async (body) =>
+    (await (await fetch(BASE + '/api/tasks', {
+      method: 'POST',
+      headers: { 'x-wb-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json());
+  const kidParentTitle = 'UI 子待办父 ' + Date.now();
+  const kidParent = await mkApi({ title: kidParentTitle });
+  await mkApi({ title: 'UI 子项一', parentId: kidParent.task.id });
+  await mkApi({ title: 'UI 子项二', parentId: kidParent.task.id });
+  const remindTitle = 'UI 提醒 ' + Date.now();
+  const remindTask = await mkApi({ title: remindTitle, remindAt: `${vm.runInContext('addDays(todayStr(), 1)', ctx)}T09:00` });
+
+  vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('all')", ctx);
+  await sleep(700);
+  const kidParentRow = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(kidParentTitle));
+  check('父任务行显示子项进度', (kidParentRow?.querySelector('.row-child')?.textContent || '') === '0/2', kidParentRow?.querySelector('.row-child')?.textContent);
+  const remindRow = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(remindTitle));
+  check('有提醒的任务行带闹钟标', remindRow?.querySelector('.row-remind') !== null);
+
+  kidParentRow?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(700);
+  check('详情列出子待办', documentElement.querySelectorAll('#detail .kid').length === 2, String(documentElement.querySelectorAll('#detail .kid').length));
+  check('详情有提醒时间输入', documentElement.querySelector('#detail .d-remind') !== null);
+  documentElement.querySelector('#detail .kid .tick')?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(1000);
+  check('勾子项后变成已完成', documentElement.querySelectorAll('#detail .kid.done').length === 1, String(documentElement.querySelectorAll('#detail .kid.done').length));
+  const kidInput = documentElement.querySelector('#detail .kid-input');
+  kidInput.value = 'UI 子项三';
+  kidInput.dispatchEvent({ type: 'input', bubbles: true });
+  kidInput.dispatchEvent({ type: 'keydown', key: 'Enter', bubbles: true });
+  await sleep(1000);
+  check('行内回车能加子项', documentElement.querySelectorAll('#detail .kid').length === 3, String(documentElement.querySelectorAll('#detail .kid').length));
+  vm.runInContext("closeDetail()", ctx);
+
+  const splitMark = 'UI 拆条 ' + Date.now();
+  documentElement.querySelector('#qaAdd')?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(300);
+  const splitBox = documentElement.querySelector('#tmTitle');
+  splitBox.value = `1. ${splitMark}甲\n2. ${splitMark}乙`;
+  splitBox.dispatchEvent({ type: 'input', bubbles: true });
+  documentElement.querySelector('#taskModal form')?.dispatchEvent({ type: 'submit', bubbles: true, cancelable: true });
+  await sleep(1800);
+  const splitRes = await (await fetch(BASE + '/api/tasks?status=open&limit=50&q=' + encodeURIComponent(splitMark), {
+    headers: { 'x-wb-token': token },
+  })).json();
+  check('序号列表拆成多条待办', (splitRes.tasks || []).length === 2, String((splitRes.tasks || []).length));
+
+  vm.runInContext("setView('today')", ctx);
+  await sleep(700);
+  const bulkBtn = [...documentElement.querySelectorAll('.group-head .btn')].find((b) => (b.textContent || '').includes('一键完成'));
+  check('今日视图有逾期待办一键完成', Boolean(bulkBtn), [...documentElement.querySelectorAll('.group-head .btn')].map((b) => b.textContent).join('|'));
+
+  // ---- v1.3：置顶 / 七段分组 / 日历视图 / 导出 ----
+  const stamp13 = Date.now();
+  const mark = 'UI 分组 ' + stamp13;
+  const dueOverdue = await mkApi({ title: `${mark} 逾期`, dueOn: vm.runInContext('addDays(todayStr(), -2)', ctx) });
+  const dueToday = await mkApi({ title: `${mark} 今天`, dueOn: vm.runInContext('todayStr()', ctx) });
+  const dueWeek = await mkApi({ title: `${mark} 本周`, dueOn: vm.runInContext('addDays(todayStr(), 2)', ctx) });
+  const dueNone = await mkApi({ title: `${mark} 无日期` });
+
+  vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('all')", ctx);
+  await sleep(800);
+  const groupText = [...documentElement.querySelectorAll('.group-head')].map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim());
+  check('全部待办分成七段（逾期/今天/本周/无日期都在）',
+    ['逾期', '今天', '本周', '无日期'].every((w) => groupText.some((g) => g.includes(w))), groupText.join(' | '));
+  const exportBtn = [...documentElement.querySelectorAll('#viewTools button')].find((b) => (b.textContent || '').includes('导出'));
+  check('全部待办有导出按钮', Boolean(exportBtn), [...documentElement.querySelectorAll('#viewTools button')].map((b) => b.textContent).join('|'));
+
+  const pinRow = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(`${mark} 本周`));
+  const pinBtn = pinRow ? [...pinRow.querySelectorAll('button')].find((b) => (b.textContent || '').includes('📌')) : null;
+  check('行上有置顶按钮', Boolean(pinBtn));
+  pinBtn?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(1200);
+  const pinnedRow = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(`${mark} 本周`));
+  check('置顶后标题带置顶标', pinnedRow?.querySelector('.row-pin') !== null);
+  const pinnedHeads = [...documentElement.querySelectorAll('.group-head')].map((n) => (n.textContent || '').trim());
+  check('置顶单独成组', pinnedHeads.some((g) => g.startsWith('置顶')), pinnedHeads.join('|'));
+
+  // 详情里也能置顶/取消
+  pinnedRow?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(700);
+  const detailPin = [...documentElement.querySelectorAll('#detail button')].find((b) => (b.textContent || '').includes('置顶'));
+  check('详情里有置顶开关', Boolean(detailPin), [...documentElement.querySelectorAll('#detail button')].map((b) => b.textContent).join('|'));
+  vm.runInContext('closeDetail()', ctx);
+
+  // 日历视图：42 格 + chip + 周视图 7 格
+  vm.runInContext("setView('calendar')", ctx);
+  await sleep(1000);
+  check('日历视图渲染出整月格子', documentElement.querySelectorAll('.cv-day').length === 42, String(documentElement.querySelectorAll('.cv-day').length));
+  const calChips = [...documentElement.querySelectorAll('.cv-chip')];
+  check('日历格子里有任务 chip', calChips.length > 0, String(calChips.length));
+  check('chip 可拖拽', calChips.some((c) => c.draggable === true || c.getAttribute?.('draggable') === 'true'));
+  const todayCellV13 = [...documentElement.querySelectorAll('.cv-day')].find((c) =>
+    (c.getAttribute?.('title') || '').startsWith(vm.runInContext('todayStr()', ctx)));
+  check('今天的格子被标出来', todayCellV13?.classList.contains('today') === true || documentElement.querySelectorAll('.cv-day.today').length === 1);
+  vm.runInContext("state.cv.mode='week'; refresh()", ctx);
+  await sleep(1000);
+  check('周视图只渲染 7 列', documentElement.querySelectorAll('.cv-day').length === 7, String(documentElement.querySelectorAll('.cv-day').length));
+
+  // ---- v1.4：每日/每周滚动 + 日历虚拟条目 ----
+  const stamp14 = Date.now();
+  const dailyMark = 'UI 每日 ' + stamp14;
+  const dailyCreate = await mkApi({
+    title: dailyMark,
+    recurrence: { rule: 'daily', start_date: vm.runInContext('todayStr()', ctx), interval_n: 1 },
+  });
+  const dailySeriesId14 = dailyCreate?.series?.id;
+  check('每日重复创建成功且只一条活行', Boolean(dailySeriesId14) && dailyCreate?.seriesOccurrences === 1, JSON.stringify(dailyCreate?.seriesOccurrences));
+  check('每日系列的文案是「每天」', dailyCreate?.series?.rule_label === '每天', String(dailyCreate?.series?.rule_label));
+
+  // 系列页显示「每天」+ 滚动轮数
+  await fetch(BASE + '/api/series', { headers: { 'x-wb-token': token } });
+  vm.runInContext('loadSeries().then(() => setView(\'series\'))', ctx);
+  await sleep(1200);
+  const seriesRows14 = [...documentElement.querySelectorAll('.series-row')].map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim());
+  check('系列页出现每日系列并写「每天」', seriesRows14.some((r) => r.includes(dailyMark) && r.includes('每天')), seriesRows14.join(' | '));
+
+  // 完成活行 → 滚动到下一期
+  const liveId14 = dailyCreate?.task?.id;
+  await fetch(BASE + `/api/tasks/${liveId14}/complete`, {
+    method: 'POST',
+    headers: { 'x-wb-token': token, 'content-type': 'application/json' },
+    body: '{}',
+  });
+  const afterRoll = await (await fetch(BASE + `/api/series/${dailySeriesId14}`, { headers: { 'x-wb-token': token } })).json();
+  check('完成一期后系列滚了 1 轮', afterRoll?.series?.repeat_done_count === 1, String(afterRoll?.series?.repeat_done_count));
+  check('系列里是活行 + 历史行', (afterRoll?.tasks || []).length === 2, String((afterRoll?.tasks || []).length));
+
+  // 日历里的未来几期是虚线虚拟条目，不能拖
+  vm.runInContext("state.cv.mode='month'; setView('calendar')", ctx);
+  await sleep(1200);
+  const virtChips = [...documentElement.querySelectorAll('.cv-chip')].filter((c) => c.classList.contains('virt'));
+  check('日历里有周期虚拟条目', virtChips.length > 0, String(virtChips.length));
+  check('虚拟条目不可拖拽', virtChips.every((c) => c.draggable !== true && c.getAttribute?.('draggable') !== 'true'));
+
+  // 新建弹窗里的重复规则有三档
+  documentElement.querySelector('#qaAdd')?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(400);
+  const ruleOpts = [...documentElement.querySelectorAll('#tmRule option')].map((o) => o.getAttribute?.('value') || o.value);
+  check('重复规则有每月/每天/每周三档', ruleOpts.length === 3 && ruleOpts.includes('daily') && ruleOpts.includes('weekly'), ruleOpts.join('|'));
+  const recurBox = documentElement.querySelector('#tmRecur');
+  recurBox.checked = true;
+  recurBox.dispatchEvent({ type: 'change', bubbles: true });
+  const ruleSel14 = documentElement.querySelector('#tmRule');
+  ruleSel14.value = 'daily';
+  ruleSel14.dispatchEvent({ type: 'change', bubbles: true });
+  await sleep(300);
+  check('选「每 N 天」时出现间隔输入', Boolean(documentElement.querySelector('#tmIntervalDaily')));
+  check('选「每 N 天」时号数网格被收起', documentElement.querySelector('#tmDayGrid')?.hidden === true);
+  documentElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
+  await sleep(300);
+
+  // 清理：本段建的每日系列
+  if (dailySeriesId14) await fetch(BASE + `/api/series/${dailySeriesId14}`, { method: 'DELETE', headers: { 'x-wb-token': token } });
+  // 删系列不会带走已经写出的归档 md（/api/archive/tree 按库遍历看不到孤儿文件），这里顺手扫一遍
+  try {
+    const root = path.join(ROOT, 'archive');
+    const walk = (dir) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) walk(full);
+        else if (ent.name.includes(dailyMark) || ent.name.includes('UI-每日-')) fs.rmSync(full, { force: true });
+      }
+    };
+    if (fs.existsSync(root)) walk(root);
+  } catch { /* 归档目录不存在或没权限，不影响断言 */ }
+
+  // 清理：本段新建的四条任务
+  for (const d of [dueOverdue, dueToday, dueWeek, dueNone]) {
+    if (d?.task?.id) {
+      await fetch(BASE + `/api/tasks/${d.task.id}/purge`, { method: 'POST', headers: { 'x-wb-token': token, 'content-type': 'application/json' }, body: '{}' });
+    }
+  }
+
+  // 清理：新造的子待办父（子项随父一起 purge）、提醒任务、拆条任务
+  for (const id of [kidParent.task.id, remindTask.task.id, ...(splitRes.tasks || []).map((t) => t.id)]) {
+    await fetch(BASE + `/api/tasks/${id}/purge`, { method: 'POST', headers: { 'x-wb-token': token, 'content-type': 'application/json' }, body: '{}' });
+  }
+
   // 清理：当天视图的两个 fixture
   for (const f of [fixtureDue, fixtureDone]) {
     if (!f?.id) continue;
@@ -617,5 +805,5 @@ try {
   console.error('UI 冒烟异常：', err?.stack || err);
 }
 
-console.log(`\nUI 冒烟结果：${failures === 0 ? '全部通过' : failures + ' 项失败'}`);
+console.log(`\nUI 冒烟结果：${checks - failures}/${checks} 通过${failures ? `，${failures} 项失败` : ''}`);
 process.exit(failures === 0 ? 0 : 1);

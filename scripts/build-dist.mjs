@@ -11,7 +11,7 @@ const BUILD = path.join(ROOT, 'build');
 const OUT = path.join(BUILD, 'out');
 const DIST = path.join(ROOT, 'dist');
 const NAME = '待办工作台';
-const VERSION = '1.1.0';
+const VERSION = '1.5.0';
 // 便携版目录放在 build/ 下：dist 只放要发给同事的成品（exe / 安装包 / zip / 使用说明）
 const PORTABLE = path.join(BUILD, 'portable', NAME);
 const CSC = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
@@ -61,9 +61,15 @@ function listCs(dir) {
   return out;
 }
 
+// build\app.ico 被 .gitignore 排除了（二进制素材），干净 clone 里可能没有；
+// 有就用，没有就编个不带图标的 exe，别让整次打包因为一个图标失败。
+const iconFile = path.join(BUILD, 'app.ico');
+const iconArg = fs.existsSync(iconFile) ? [`/win32icon:${iconFile}`] : [];
+if (!iconArg.length) log('  ! 没找到 build\\app.ico，这次打出来的 exe 用系统默认图标');
+
 const cscBase = [
   '/nologo', '/target:winexe', '/langversion:5', '/platform:anycpu', '/codepage:65001', '/utf8output', '/optimize+',
-  `/win32icon:${path.join(BUILD, 'app.ico')}`,
+  ...iconArg,
   '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll',
   '/r:System.Web.Extensions.dll', '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
 ];
@@ -73,6 +79,8 @@ const setupSrc = listCs(path.join(BUILD, 'src', 'setup'));
 /* 1) 启动器（两份：便携版不带 payload、单文件版带 payload） */
 rm(OUT);
 fs.mkdirSync(OUT, { recursive: true });
+// dist/ 被 .gitignore 排除了，干净 clone 里没有这个目录，先建出来
+fs.mkdirSync(DIST, { recursive: true });
 // 清掉 dist 里以前跑测试 / 早期版本留下的目录，只留最终产物
 for (const stale of ['setup-test.exe', 'setup.log', 'debug.log', '.app', 'logs', '工作台数据', NAME, '_test-install', '_inst2', '_inst3', '_data2', '_data3']) {
   rm(path.join(DIST, stale));
@@ -95,11 +103,15 @@ log('   node.exe ' + mb(fs.statSync(path.join(PORTABLE, 'node.exe')).size));
 const readme = `待办工作台 · 便携版 ${VERSION}
 ==============================
 
-这一版的新东西
-  · 新建待办里可以「文件夹…」「文件…」直接挑路径，不用手打；路径里有中文也不会乱码。
-  · 标题输入框挪到最上面、加了必填提示，不再藏在表单里。
-  · 双击 exe 默认开「应用窗口」（无地址栏、任务栏有自己的图标）；
-    如果系统拦着开不出窗口，会自动退回默认浏览器打开，不会再出现「点了没反应」。
+这一版的新东西（1.2 → 1.5）
+  · 界面照 iOS 重做：系统配色、投影分层、选中行蓝底描边，深色同步。
+  · 子待办：父任务下挂一层小项，父行显示 2/3 进度，勾父带子一起完成。
+  · 到期提醒：每条待办可单独设提醒；页面开着弹提示，关掉后托盘气泡提醒。
+  · 重复待办（原来的「每月例行」）：每月某日 / 每 N 天 / 每 N 周；每天每周只有
+    一条活行，勾掉就滚到下一期，漏掉的期直接跳过，不会堆一摞逾期副本。
+  · 日历视图：月 / 周两档，格子里的条目可以拖到别的日子改期，例行未来期画虚线。
+  · 置顶、全部待办七段时间分段、组内拖动排序、把当前筛选导出成 Markdown。
+  · 双击启动器窗口会自己关，服务留在后台；托盘菜单里可以退出。
 
 怎么用
   双击「${NAME}.exe」——窗口会先出现，然后自动打开浏览器。

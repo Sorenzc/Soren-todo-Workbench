@@ -42,7 +42,26 @@ node scripts\reset.mjs          # 清空任务、速记、系列、归档，保�
 - 清完删掉 `data/backups`（里面有清库前的快照，含演示数据）、`data/shots`、`data/updates`、`data/edge-cdp-profile`、`archive/*`
 - 用 sqlite 确认 `task` / `memo` / `task_series` 都是 0 行、`archive/` 是 0 个文件，再往下走
 
-### 3. 发布流程
+### 3. 发布流程（优先用脚本）
+
+```bash
+node scripts/release.mjs --notes docs/release-notes-v<版本>.md
+```
+
+一条命令依次做：清演示数据（`stop.mjs` + `reset.mjs`，删 `data/backups|shots|updates|edge-cdp-profile`、清 `archive/*`，并用 SQLite 断言 `task`/`memo`/`task_series` 为 0）→ 提交 → 推送（`github.com:443` 不通时自动用 Git Data API 逐提交重放）→ `git tag -f v<版本>` 并推 tag → `build-dist.mjs` → `verify-setup.mjs` 验收 → 复制成固定名资产 → `gh release create --verify-tag --latest` → 读回 release 断言 `state=uploaded`。
+
+前置：`package.json` 已是待发版本、`docs/release-notes-v<版本>.md` 已写好。只想检查不发布用 `--dry-run`；用现有 dist 不重打包用 `--no-build`。
+
+### 4. 安装包自动验收
+
+```bash
+node scripts/verify-setup.mjs            # dist 里当前版本的安装包
+node scripts/verify-setup.mjs --keep     # 失败时保留临时目录
+```
+
+十项检查：向导三页出图且自检通过（按钮可见、文字不越界）→ 静默安装到临时目录 → `app\<版本>\` 与 `node.exe` 存在 → `config.json` 的版本与 `dataDir` → 注册表 `DisplayVersion` → 启动器 `--selftest` → 静默卸载删干净程序目录 → 注册表项移除。任一项失败返回非 0。
+
+### 5. 手工兜底流程（脚本不可用时）
 
 清数据 → 提交 → 推送（`github.com:443` 不通时用 Git Data API 重放提交）→ 打 tag `vX.Y.Z` → `node scripts\build-dist.mjs` → `gh release create` → 上传两个固定名资产 → 校验资产 `state=uploaded` 与大小。
 

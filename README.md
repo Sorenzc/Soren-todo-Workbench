@@ -230,6 +230,18 @@ signtool sign /fd sha256 /f your-cert.pfx /p 密码 /tr http://timestamp.digicer
 未签名 exe 第一次运行会弹 SmartScreen「Windows 已保护你的电脑」，
 点「更多信息 → 仍要运行」即可；走微信/网盘传的 zip 一般不会拦。
 
+## 打包与发布脚本
+
+打包和发布都不再靠手工敲命令：
+
+```bash
+node scripts/build-dist.mjs                                       # 只打包：dist 里出安装包与便携 zip
+node scripts/verify-setup.mjs                                     # 安装包验收：向导三页 + 静默安装 + 自检 + 卸载
+node scripts/release.mjs --notes docs/release-notes-v1.9.5.md     # 一条命令发布
+```
+
+- `verify-setup.mjs`：十项检查（三页排版与按钮可见、装到临时目录、文件与 `config.json`、注册表 `DisplayVersion`、启动器 `--selftest`、卸载清理），任一项不过就返回非 0；`--keep` 保留现场，`--preview-only` 只核对向导。
+- `release.mjs`：清演示数据（并断言 `task`/`memo`/`task_series` 为 0）→ 提交 → 推送（`github.com` 不通时自动走 Git Data API 重放）→ 打 tag → 打包 → 验收 → 上传**固定名**资产 → 读回校验。`--dry-run` 只检查前置条件，`--no-build` 用现有 dist。
 ## 命令行小工具
 
 ```bat

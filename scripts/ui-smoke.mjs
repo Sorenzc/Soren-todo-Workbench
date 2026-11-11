@@ -766,6 +766,89 @@ try {
   documentElement.dispatchEvent({ type: 'keydown', key: 'Escape', bubbles: true });
   await sleep(300);
 
+  // ---- v1.6：聚焦页小组件 / 快速捕获 / 键盘流 ----
+  vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('focus')", ctx);
+  await sleep(400);
+  const capForm = documentElement.querySelector('#captureForm');
+  check('聚焦页有快速捕获框', Boolean(capForm));
+  check('聚焦页速记框可见', capForm && !capForm.hidden);
+
+  // 键盘流（C 聚焦速记框、/ 打开搜索）依赖真实焦点与弹窗遮罩，
+  // 由 scripts/e2e.mjs 在真浏览器里验证；极简 DOM shim 不实现 activeElement（见上文同注释）
+
+  // 速记解析：!p1 @明天 #合同 → 优先级 / 日期 / 标签
+  const quickParsed = JSON.parse(vm.runInContext("JSON.stringify(parseQuick('!p1 @明天 #合同 交材料'))", ctx));
+  check('速记解析优先级', quickParsed.priority === 1, `priority=${quickParsed.priority}`);
+  check('速记解析标签', (quickParsed.tags || []).includes('合同'), JSON.stringify(quickParsed.tags));
+  check('速记解析标题', quickParsed.title === '交材料', quickParsed.title);
+  check('速记解析日期是明天', quickParsed.dueOn === vm.runInContext('addDays(todayStr(), 1)', ctx), String(quickParsed.dueOn));
+
+  // 速记框在其它视图隐藏
+  vm.runInContext("setView('stats')", ctx);
+  await sleep(300);
+  check('统计视图不显示速记框', documentElement.querySelector('#captureForm')?.hidden === true);
+
+  // 小组件：待办少于 5 条时出现，多了自动收起。
+  // 注意必须先 setView（refresh 会重新拉 bootstrap 覆盖 counts），再改 counts 并重绘。
+  vm.runInContext("setView('focus')", ctx);
+  await sleep(500);
+  vm.runInContext("state.bootstrap.counts.open = 2; state.wg = { from:'', to:'', days:{}, doneDays:{}, loaded:true }; renderAll()", ctx);
+  await sleep(200);
+  check('待办少时显示聚焦小组件', Boolean(documentElement.querySelector('#list .fw')), 'expect .fw');
+
+  vm.runInContext("state.bootstrap.counts.open = 9; renderAll()", ctx);
+  await sleep(200);
+  check('待办多时收起聚焦小组件', !documentElement.querySelector('#list .fw'), 'expect no .fw');
+
+  // ---- v1.7：速记独立成库 ----
+  const memoMark = 'UI 速记 ' + Date.now();
+  const memoApi = async (path2, init) =>
+    (await (await fetch(BASE + path2, {
+      ...init,
+      headers: { 'x-wb-token': token, 'content-type': 'application/json' },
+    })).json());
+  const memoCreated = await memoApi('/api/memos', { method: 'POST', body: JSON.stringify({ body: memoMark }) });
+  const memoId = memoCreated.memo?.id;
+  check('速记接口能建', Boolean(memoId), JSON.stringify(memoCreated).slice(0, 120));
+
+  vm.runInContext("setView('memo')", ctx);
+  await sleep(400);
+  const navLabels = [...documentElement.querySelectorAll('#navViews button')].map((b) => (b.textContent || '').trim());
+  check('侧边栏有「速记」入口', navLabels.some((x) => x.includes('速记')), navLabels.join('|'));
+  const head = documentElement.querySelector('.memo-head');
+  const search = documentElement.querySelector('#memoSearch');
+  check('速记视图有搜索框', Boolean(head && search));
+  const memoRows = documentElement.querySelectorAll('.memo');
+  check('速记视图渲染出条目', memoRows.length > 0, `rows=${memoRows.length}`);
+  check('速记正文出现在列表里', (documentElement.querySelector('#list')?.textContent || '').includes(memoMark));
+
+  // 速记条在速记视图里也是可见的（它就是这个库的输入口）
+  const capInMemo = documentElement.querySelector('#captureForm');
+  check('速记视图保留速记输入条', Boolean(capInMemo) && !capInMemo.hidden);
+  const capTag = capInMemo?.querySelector('.capture-tag');
+  check('速记条有「速记」标识', (capTag?.textContent || '') === '速记');
+
+  // 搜索过滤：搜一个不存在的词，列表应为空态
+  await memoApi(`/api/memos/${memoId}/purge`, { method: 'POST', body: '{}' });
+  vm.runInContext("state.memoQ='绝不存在的速记词'; loadMemos().then(renderAll)", ctx);
+  await sleep(500);
+  check('速记搜不到时给空态', Boolean(documentElement.querySelector('.memo-empty')));
+  vm.runInContext("state.memoQ=''; loadMemos().then(renderAll)", ctx);
+  await sleep(300);
+
+  // 速记条的提交变成「存速记」，不再建待办
+  const beforeTasks = (await (await fetch(BASE + '/api/tasks?status=all&limit=1', { headers: { 'x-wb-token': token } })).json()).tasks.length;
+  const quickMemo = 'UI 速记条 ' + Date.now();
+  vm.runInContext(`captureQuick(${JSON.stringify(quickMemo)})`, ctx);
+  await sleep(600);
+  const memosNow = await (await fetch(BASE + `/api/memos?q=${encodeURIComponent(quickMemo)}`, { headers: { 'x-wb-token': token } })).json();
+  check('速记条提交存进速记', (memosNow.memos || []).length === 1, JSON.stringify(memosNow).slice(0, 120));
+  const afterTasks = (await (await fetch(BASE + '/api/tasks?status=all&limit=1', { headers: { 'x-wb-token': token } })).json()).tasks.length;
+  check('速记条提交不会建待办', beforeTasks === afterTasks, `${beforeTasks}→${afterTasks}`);
+  for (const m of memosNow.memos || []) {
+    await memoApi(`/api/memos/${m.id}/purge`, { method: 'POST', body: '{}' });
+  }
+
   // 清理：本段建的每日系列
   if (dailySeriesId14) await fetch(BASE + `/api/series/${dailySeriesId14}`, { method: 'DELETE', headers: { 'x-wb-token': token } });
   // 删系列不会带走已经写出的归档 md（/api/archive/tree 按库遍历看不到孤儿文件），这里顺手扫一遍

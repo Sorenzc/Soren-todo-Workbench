@@ -17,6 +17,7 @@ import { captureConsole, initLog, logPath } from './log.mjs';
 import * as T from './tasks.mjs';
 import * as S from './series.mjs';
 import * as A from './archive.mjs';
+import * as M from './memos.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // 版本号只有一个来源：package.json（安装包、/api/health、页面角标都读它）
@@ -228,6 +229,7 @@ function bootstrap() {
         "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
       )
       .get(localDate())?.n,
+    memos: M.countMemos(db),
   };
   return {
     today: localDate(),
@@ -240,6 +242,7 @@ function bootstrap() {
       done: Number(counts.done ?? 0),
       overdue: Number(counts.overdue ?? 0),
       today: Number(counts.today ?? 0),
+      memos: Number(counts.memos ?? 0),
     },
     settings: getSettings(db),
     archiveRoot: cfg.archiveRoot,
@@ -458,6 +461,17 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && pathname === '/api/tags') return sendJson(res, 200, { tags: T.listTags(db) });
   if (method === 'GET' && pathname === '/api/stats') return sendJson(res, 200, T.stats(db));
 
+  // 速记：和待办完全独立的一套接口
+  if (method === 'GET' && pathname === '/api/memos') {
+    const q = url.searchParams.get('q') || '';
+    const limit = url.searchParams.get('limit') || 200;
+    return sendJson(res, 200, { memos: M.listMemos(db, { q, limit }), count: M.countMemos(db) });
+  }
+  if (method === 'POST' && pathname === '/api/memos') {
+    const body = await readBody(req);
+    return sendJson(res, 201, { memo: tx(db, () => M.createMemo(db, body)) });
+  }
+
   if (method === 'GET' && pathname === '/api/archive/tree') return sendJson(res, 200, A.archiveTree(db));
   if (method === 'GET' && pathname === '/api/archive/month') {
     const ym = url.searchParams.get('ym') || localDate().slice(0, 7);
@@ -569,6 +583,22 @@ async function handleApi(req, res, url) {
       if (!link) throw new ApiError(404, 'NO_LINK', '该待办尚未关联文件夹');
       return sendJson(res, 200, openLink(link));
     }
+  }
+
+  // ---------- /api/memos/:id ----------
+  if (seg[0] === 'api' && seg[1] === 'memos' && seg[2]) {
+    const id = seg[2];
+    const sub = seg[3];
+    if (!sub) {
+      if (method === 'GET') return sendJson(res, 200, { memo: M.getMemo(db, id) });
+      if (method === 'PATCH' || method === 'PUT') {
+        const body = await readBody(req);
+        return sendJson(res, 200, { memo: tx(db, () => M.patchMemo(db, id, body.patch ?? body, body.rev)) });
+      }
+      if (method === 'DELETE') return sendJson(res, 200, tx(db, () => M.softDeleteMemo(db, id)));
+    }
+    if (sub === 'restore' && method === 'POST') return sendJson(res, 200, { memo: tx(db, () => M.restoreMemo(db, id)) });
+    if (sub === 'purge' && method === 'POST') return sendJson(res, 200, tx(db, () => M.purgeMemo(db, id)));
   }
 
   // ---------- /api/links/:id ----------

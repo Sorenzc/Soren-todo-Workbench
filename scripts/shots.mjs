@@ -123,6 +123,8 @@ const SCENARIOS = {
   dayDue: { url: '/?view=day&mode=due', desc: '某一天：当天到期' },
   calendar: { url: '/', desc: '月历浮层', steps: [openCalendar] },
   calView: { url: '/?view=calendar', desc: '日历视图（整月格子 + 条目）' },
+  memo: { url: '/?view=memo', desc: '速记（随手记的便签）' },
+  memoDark: { url: '/?view=memo&theme=dark', desc: '深色下的速记' },
   detail: { url: '/', desc: '打开详情面板', steps: [clickFirstRow] },
   detailEdge: { url: '/?view=today', desc: '选中多行卡片的第一行（圆角描边）', steps: [clickCardFirstRow] },
   palette: { url: '/', desc: '命令面板', steps: [openPalette] },

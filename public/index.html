@@ -64,6 +64,11 @@
         <div class="view-tools" id="viewTools"></div>
         <button type="button" class="qa-submit" id="qaAdd" aria-haspopup="dialog" title="新建待办（N）">＋ 添加</button>
       </div>
+      <form class="capture-bar" id="captureForm" autocomplete="off">
+        <span class="capture-tag" aria-hidden="true">速记</span>
+        <input id="captureInput" placeholder="随手记一句，回车就存进「速记」" aria-label="速记：随手记一句" />
+        <kbd>C</kbd>
+      </form>
       <div class="list" id="list"></div>
       <div class="empty" id="empty" hidden></div>
       <footer class="statusbar" id="statusBar"></footer>

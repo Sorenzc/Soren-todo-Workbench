@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS task_event (
 ) STRICT;
 
 -- ---------------- 键值配置 ----------------
+-- 速记：随手记下来的便签，和待办是两个独立的东西（不进列表、不算逾期、不参与统计）
+CREATE TABLE IF NOT EXISTS memo (
+  id              TEXT PRIMARY KEY,
+  body            TEXT NOT NULL,
+  pinned          INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  rev             INTEGER NOT NULL DEFAULT 1,
+  deleted_at      TEXT,
+  CHECK (length(body) BETWEEN 1 AND 4000)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ix_memo_created
+  ON memo(created_at DESC)
+  WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS setting (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,

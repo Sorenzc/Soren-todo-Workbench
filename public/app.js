@@ -119,6 +119,11 @@ const state = {
   flashTaskId: null,
   // 每月例行系列
   series: [],
+  // 聚焦页小组件：当月 6×7 宫格与本月的每日计数（/api/calendar 一次取回）
+  wg: { from: '', to: '', days: {}, doneDays: {}, loaded: false },
+  // 速记（独立一库）：列表与搜索词
+  memos: [],
+  memoQ: '',
 };
 
 /* ------------------------------ Toast ------------------------------ */
@@ -265,6 +270,20 @@ async function loadFocus() {
   state.tasks = open.tasks;
 }
 
+/* 聚焦页小组件只在「待办不多」时出现：条目一多就让位给任务本身 */
+function widgetsWanted() {
+  return (state.bootstrap?.counts?.open ?? 0) < 5;
+}
+
+async function loadFocusWidgets() {
+  // 6×7 宫格 + 本周可能跨月，前后各多取一周，跨度仍在 /api/calendar 的 62 天上限内
+  const ym = monthOf(todayStr());
+  const from = addDays(`${ym}-01`, -7);
+  const to = addDays(addDays(`${monthOf(addMonths(ym, 1))}-01`, -1), 7);
+  const r = await api.get(`/api/calendar?from=${from}&to=${to}`);
+  state.wg = { from, to, days: r.days || {}, doneDays: r.done_days || {}, loaded: true };
+}
+
 async function loadTasks() {
   const params = new URLSearchParams({ status: 'open', limit: '500' });
   if (state.filter.cat) params.set('category', state.filter.cat);
@@ -303,6 +322,31 @@ async function loadArchive() {
 
 async function loadStats() {
   state.stats = await api.get('/api/stats');
+}
+
+/* ---------------------------- 速记（独立一库） ---------------------------- */
+async function loadMemos() {
+  const q = state.memoQ ? `?q=${encodeURIComponent(state.memoQ)}&limit=200` : '?limit=200';
+  const r = await api.get('/api/memos' + q);
+  state.memos = r.memos || [];
+}
+
+/** 速记的时间口径：刚记的用「刚刚 / N 分钟前」，跨天用日期，跨年带年 */
+function memoTime(iso) {
+  if (!iso) return '';
+  const d = parseDate(String(iso).slice(0, 10));
+  const today = parseDate(todayStr());
+  const days = Math.round((today - d) / 86400000);
+  const hm = String(iso).slice(11, 16);
+  if (days <= 0) {
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 1) return '刚刚';
+    if (mins < 60) return `${mins} 分钟前`;
+    return `今天 ${hm}`;
+  }
+  if (days === 1) return `昨天 ${hm}`;
+  if (d.getFullYear() === today.getFullYear()) return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 /* --------------------------- 日历视图（月/周） --------------------------- */
@@ -483,6 +527,9 @@ async function refresh() {
     else if (state.view === 'archive') await loadArchive();
     else if (state.view === 'stats') { await loadTasks(); await loadStats(); }
     else if (state.view === 'calendar') await loadCalendarView();
+    else if (state.view === 'memo') await loadMemos();
+    // 聚焦页小组件要一份「本月每天几件」的计数，只在用得上的时候取
+    if (state.view === 'focus' && widgetsWanted()) await loadFocusWidgets();
     if (state.cal.open) await loadCalendarMonth(state.cal.ym);
     renderAll();
   } catch (err) {
@@ -501,6 +548,8 @@ const VIEWS = [
   { id: 'stats', label: '统计', icon: '▦' },
   // 追加在最后：e2e 用 #navViews button:nth-child(4) 点「每月例行」，别插到前面去
   { id: 'calendar', label: '日历', icon: '⊞' },
+  // 速记也追加在最后：它是独立一库（便签/备忘录），不参与待办计数
+  { id: 'memo', label: '速记', icon: '✎' },
 ];
 
 function renderNav() {
@@ -515,6 +564,7 @@ function renderNav() {
     else if (v.id === 'all') n = counts.open ?? '';
     else if (v.id === 'series') n = (state.series || []).filter((s) => s.status === 'active').length || '';
     else if (v.id === 'done') n = counts.done ?? '';
+    else if (v.id === 'memo') n = counts.memos ?? '';
     const btn = el('button', { class: `nav-item${state.view === v.id ? ' active' : ''}`, onclick: () => setView(v.id) },
       el('span', { class: 'n-icon', text: v.icon }),
       el('span', { text: v.label }),
@@ -679,13 +729,193 @@ function rowCard(items) {
   return card;
 }
 
+/* ------------------------------ 聚焦页小组件 ------------------------------ */
+function greetingOf(hour) {
+  if (hour < 6) return '夜深了';
+  if (hour < 9) return '早上好';
+  if (hour < 12) return '上午好';
+  if (hour < 14) return '中午好';
+  if (hour < 18) return '下午好';
+  if (hour < 23) return '晚上好';
+  return '夜深了';
+}
+
+function clockText(d = new Date()) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function minuteText(minutes) {
+  const m = Math.max(0, Math.round(Number(minutes) || 0));
+  if (!m) return '';
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (!h) return `${rest} 分钟`;
+  return rest ? `${h} 小时 ${rest} 分` : `${h} 小时`;
+}
+
+/** 今天到期 + 逾期（还没做）的预计耗时，只统计填过预估的 */
+function todayLoad() {
+  let count = 0;
+  let minutes = 0;
+  for (const t of state.tasks) {
+    if (!t.due_on || daysLeft(t.due_on) > 0) continue;
+    count += 1;
+    minutes += Number(t.estimate_min || 0);
+  }
+  return { count, minutes };
+}
+
+function greetText(d = new Date()) {
+  const load = todayLoad();
+  const tail = load.count ? `今天有 ${load.count} 件要处理` : '今天还没有安排';
+  return `${greetingOf(d.getHours())}，${tail}`;
+}
+
+/** 今天接下来要做的那一件：先按时间排，没填时间的排在后面 */
+function nextUp() {
+  const todayTasks = state.tasks.filter((t) => t.due_on === todayStr() && t.status !== 'done');
+  if (!todayTasks.length) return null;
+  const sorted = [...todayTasks].sort((a, b) => {
+    const at = a.due_time || '99:99';
+    const bt = b.due_time || '99:99';
+    if (at !== bt) return at < bt ? -1 : 1;
+    return Number(a.priority) - Number(b.priority);
+  });
+  const t = sorted[0];
+  return { title: t.title, time: t.due_time || '', id: t.id };
+}
+
+function fwClock() {
+  const now = new Date();
+  const load = todayLoad();
+  const loadText = load.minutes
+    ? `预计 ${minuteText(load.minutes)}${load.count > 1 ? `（${load.count} 件里填了预估的）` : ''}`
+    : '给待办填个预估耗时，这里会算出今天要花多久';
+  const next = nextUp();
+  return el('div', { class: 'fw-card fw-clock' },
+    el('div', { class: 'fw-head' }, el('span', { text: '现在' })),
+    el('div', { class: 'fw-time', id: 'fwTime', text: clockText(now) }),
+    el('div', { class: 'fw-date', id: 'fwDate', text: mdLabel(todayStr()) }),
+    el('div', { class: 'fw-greet', id: 'fwGreet', text: greetText(now) }),
+    el('div', { class: 'fw-load', id: 'fwLoad', text: loadText }),
+    next
+      ? el('button', {
+          type: 'button', class: 'fw-next', title: '打开这一条',
+          onclick: () => selectTask(next.id),
+        },
+          el('span', { class: 'fw-next-k', text: '接下来' }),
+          el('span', { class: 'fw-next-t', text: `${next.time ? `${next.time} ` : ''}${next.title}` }))
+      : null
+  );
+}
+
+function fwMonth() {
+  const ym = monthOf(todayStr());
+  const first = `${ym}-01`;
+  const start = addDays(first, -((parseDate(first).getDay() + 6) % 7));
+  const grid = el('div', { class: 'fw-cal' });
+  ['一', '二', '三', '四', '五', '六', '日'].forEach((w) => grid.append(el('div', { class: 'fw-dow', text: w })));
+  let planned = 0;
+  let done = 0;
+  for (let i = 0; i < 42; i += 1) {
+    const date = addDays(start, i);
+    const other = monthOf(date) !== ym;
+    const count = Number(state.wg.days?.[date] || 0);
+    const doneCount = Number(state.wg.doneDays?.[date] || 0);
+    if (!other) {
+      planned += count;
+      done += doneCount;
+    }
+    const cell = el('button', {
+      type: 'button',
+      class: `fw-day${other ? ' other' : ''}${date === todayStr() ? ' today' : ''}${doneCount ? ' done' : ''}`,
+      title: `${mdLabel(date)} · ${count} 条待办${doneCount ? `，完成 ${doneCount}` : ''}`,
+      text: String(parseDate(date).getDate()),
+      onclick: () => setDay(date),
+    });
+    if (count && !other) cell.append(el('span', { class: 'd' }));
+    grid.append(cell);
+  }
+  return el('div', { class: 'fw-card' },
+    el('div', { class: 'fw-head' },
+      el('span', { text: '本月' }),
+      el('span', { text: `${Number(ym.slice(5, 7))} 月` })),
+    grid,
+    el('div', { class: 'fw-foot' },
+      el('span', { text: `排期 ${planned} 条 · 已完成 ${done}` }),
+      el('span', { text: '点日期看当天' }))
+  );
+}
+
+function fwWeek() {
+  const today = todayStr();
+  const start = addDays(today, -((parseDate(today).getDay() + 6) % 7));
+  const cells = [];
+  let doneTotal = 0;
+  let openTotal = 0;
+  let peak = 1;
+  for (let i = 0; i < 7; i += 1) {
+    const date = addDays(start, i);
+    const open = Number(state.wg.days?.[date] || 0);
+    const doneCount = Number(state.wg.doneDays?.[date] || 0);
+    doneTotal += doneCount;
+    openTotal += open;
+    peak = Math.max(peak, open, doneCount);
+    cells.push({ date, open, done: doneCount, isToday: date === today });
+  }
+  const bars = cells.map((c, i) => {
+    const value = c.done && !c.open ? c.done : c.open;
+    // 0 条的那天不画条：4px 的短横看着像「有一点点事」，反而误导
+    const h = Math.max(4, Math.round(8 + (value / peak) * 56));
+    return el('div', { class: `fw-col${c.isToday ? ' today' : ''}` },
+      el('div', { class: 'fw-track' },
+        value
+          ? el('div', {
+              class: `fw-bar${c.done && !c.open ? ' done' : c.open ? ' has' : ''}`,
+              style: { height: `${h}px` },
+              title: `${mdLabel(c.date)} · ${c.open} 条待办，完成 ${c.done}`,
+            })
+          : null),
+      el('span', { class: 'fw-num', text: WEEK_LABELS[i] })
+    );
+  });
+  const empty = !doneTotal && !openTotal;
+  return el('div', { class: 'fw-card' },
+    el('div', { class: 'fw-head' },
+      el('span', { text: '本周' }),
+      el('span', { text: '周一 → 周日' })),
+    empty
+      ? el('div', { class: 'fw-quiet', text: '这周还没排期，日子是空的也挺好' })
+      : el('div', { class: 'fw-week' }, ...bars),
+    el('div', { class: 'fw-cap', text: empty ? '想排点什么，按 C 记一条' : `完成 ${doneTotal} · 还有 ${openTotal} 条排期` })
+  );
+}
+
+function focusWidgets() {
+  if (!widgetsWanted() || !state.wg.loaded) return null;
+  return el('div', { class: 'fw' }, fwClock(), fwMonth(), fwWeek());
+}
+
 function renderFocus() {
   const list = $('#list');
   list.innerHTML = '';
   const f = state.focus;
   const items = state.tasks;
+  // 条目少的时候先把时间/日历/节奏摆出来；条目一多这部分整体让位（widgetsWanted 判定）
+  const widgets = focusWidgets();
+  if (widgets) list.append(widgets);
   if (!f || !items.length) {
-    showEmpty('今天没有必须处理的事项', '按 N 记一条，或切到「全部待办」看看还有什么。');
+    if (!widgets) {
+      showEmpty('今天没有必须处理的事项', '按 N 记一条，或切到「全部待办」看看还有什么。');
+      return;
+    }
+    // 有小组件时，空状态给三条路，而不是一句「没有」
+    list.append(el('div', { class: 'fw-empty' },
+      el('span', { class: 't', text: '今天还没有安排。' }),
+      el('button', { class: 'btn small', text: '记一条', title: '光标进速记框（C）', onclick: () => $('#captureInput')?.focus() }),
+      el('button', { class: 'btn small', text: '看看全部待办', onclick: () => setView('all') }),
+      el('button', { class: 'btn small', text: '今日简报', title: '导出今天的 Markdown 简报', onclick: () => downloadBriefing() })
+    ));
     return;
   }
   const must = f.must || [];
@@ -1100,12 +1330,18 @@ function renderViewHead() {
   tools.innerHTML = '';
   $('#empty').hidden = true;
   // 唯一的「添加」入口：归档/统计/例行/某天已完成这些不该新建的视图，隐藏它
-  const canAdd = !['archive', 'stats', 'series', 'calendar'].includes(state.view) && !isDoneDay();
+  const canAdd = !['archive', 'stats', 'series', 'calendar', 'memo'].includes(state.view) && !isDoneDay();
   $('#qaAdd').hidden = !canAdd;
+  // 速记条是「便签」入口，跟着视图而不是跟着「添加」：除归档/统计外都留着
+  const captureBar = $('#captureForm');
+  if (captureBar) captureBar.hidden = ['archive', 'stats'].includes(state.view);
   const f = state.focus;
   if (state.view === 'focus') {
+    const load = todayLoad();
     t.textContent = '聚焦';
-    sub.textContent = f ? `今天到期 ${f.today_count ?? 0} 件 · 逾期 ${f.overdue_count ?? 0} 件` : '正在计算…';
+    sub.textContent = f
+      ? `今天到期 ${f.today_count ?? 0} 件 · 逾期 ${f.overdue_count ?? 0} 件${load.minutes ? ` · 预计 ${minuteText(load.minutes)}` : ''}`
+      : '正在计算…';
   } else if (state.view === 'today') {
     const overdue = state.tasks.filter((x) => daysLeft(x.due_on) < 0).length;
     t.textContent = '今天';
@@ -1189,6 +1425,18 @@ function renderViewHead() {
       class: 'tool-btn', text: '＋ 新建例行', title: '新建一个按月 / 按天 / 按周的例行待办',
       onclick: () => openNewTaskModal({ recurring: true }),
     }));
+  } else if (state.view === 'memo') {
+    const n = (state.memos || []).length;
+    t.textContent = '速记';
+    sub.textContent = n
+      ? `${state.memoQ ? `搜索「${state.memoQ}」` : '随手记下来的东西'} · ${n} 条`
+      : '随手记一句，回车就存下来；不当待办用也可以';
+    if (state.memoQ) {
+      tools.append(el('button', {
+        class: 'tool-btn', text: '清空搜索',
+        onclick: () => { state.memoQ = ''; loadMemos().then(renderAll); },
+      }));
+    }
   }
 }
 
@@ -1209,8 +1457,10 @@ function renderStatusBar() {
   );
   const right = el('span', { class: 'sb-right' },
     el('span', {}, el('kbd', { text: 'N' }), ' 新建'),
-    el('span', {}, el('kbd', { text: 'Ctrl K' }), ' 搜索/跳转'),
-    el('span', {}, el('kbd', { text: 'Esc' }), ' 关闭详情')
+    el('span', {}, el('kbd', { text: 'C' }), ' 速记'),
+    el('span', {}, el('kbd', { text: '[ ]' }), ' 选择'),
+    el('span', {}, el('kbd', { text: 'E' }), ' 完成'),
+    el('span', {}, el('kbd', { text: 'Ctrl K' }), ' 搜索')
   );
   bar.append(left, right);
 }
@@ -1807,6 +2057,8 @@ function nextWeekday(ch) {
 }
 
 const WD_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+// 小组件里写全称，比「一/二/三」更像日历
+const WEEK_LABELS = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
 
 /** 'YYYY-MM-DD' → 0=周一 … 6=周日（和服务端的 recur.weekdayOf 同一口径） */
 function weekdayOf(dateStr) {
@@ -1868,6 +2120,8 @@ function openNewTaskModal(opts = {}) {
     dueTime: '',
     tags: Array.isArray(pre?.tags) ? pre.tags.slice() : [],
   };
+  // 从速记转过来时，正文剩下的行直接填进备注
+  const presetNotes = String(opts.notes || '').trim();
   // 重复：默认每月今天这个号，跑未来 36 期（3 年）；也可以改成每 N 天 / 每 N 周
   const recur = {
     on: Boolean(opts.recurring),
@@ -2237,6 +2491,7 @@ function openNewTaskModal(opts = {}) {
 
   /* ---- 笔记 ---- */
   const notes = el('textarea', { class: 'tm-notes', rows: '3', placeholder: '笔记（可选，Markdown 会写进归档文件）', 'aria-label': '笔记' });
+  if (presetNotes) notes.value = presetNotes;
 
   /* ---- 底部 ---- */
   const okBtn = el('button', { type: 'submit', class: 'btn primary', id: 'tmOk', form: 'tmForm', text: '创建' });
@@ -2677,6 +2932,63 @@ async function downloadBriefing() {
 
 /* --------------------------- 到期提醒（轮询） --------------------------- */
 // 服务端用 remind_fired 抢占：页面和托盘谁先轮到谁发。这里只负责把抢到的弹出来。
+/* 速记：一句话进收件箱；解析规则和新建弹窗共用 parseQuick */
+/* 速记：回车即存，独立于待办（便签/备忘录语义）。要变待办在速记列表里点「转成待办」。 */
+async function captureQuick(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return;
+  const input = $('#captureInput');
+  try {
+    const r = await api.post('/api/memos', { body: text });
+    if (input) input.value = '';
+    await loadMemos();
+    if (state.view === 'memo') renderAll();
+    else renderNav();
+    const first = text.split('\n')[0];
+    toast(`已记下：${first.length > 16 ? `${first.slice(0, 16)}…` : first}`, {
+      actionLabel: '转成待办',
+      onAction: () => { if (r?.memo) memoToTask(r.memo); },
+    });
+  } catch (err) {
+    showErr(err);
+  }
+}
+
+/* 速记 → 待办：拿正文第一行当标题，剩下的当备注，走新建弹窗让用户补日期分类 */
+function memoToTask(memo) {
+  const lines = String(memo?.body || '').split('\n');
+  const title = (lines[0] || '').trim();
+  const notes = lines.slice(1).join('\n').trim();
+  openNewTaskModal({ prefill: title, notes, memoId: memo?.id });
+}
+
+/* 键盘上下选择：把当前选中挪到相邻一行，并跟着滚动 */
+async function moveSelection(delta) {
+  const rows = Array.from(document.querySelectorAll('#list .row'));
+  if (!rows.length) return;
+  const ids = rows.map((r) => r.dataset.id);
+  const at = ids.indexOf(state.selectedId);
+  let next = at < 0 ? (delta > 0 ? 0 : ids.length - 1) : at + delta;
+  next = Math.max(0, Math.min(ids.length - 1, next));
+  const id = ids[next];
+  if (!id || id === state.selectedId) return;
+  await selectTask(id);
+  document.querySelector(`#list .row[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
+/* 时钟只在聚焦页存在时每秒走一格；不在这个视图就不做任何事 */
+function tickFocusClock() {
+  if (state.view !== 'focus') return;
+  const time = $('#fwTime');
+  if (!time) return;
+  const d = new Date();
+  time.textContent = clockText(d);
+  const dateEl = $('#fwDate');
+  if (dateEl) dateEl.textContent = mdLabel(todayStr());
+  const greet = $('#fwGreet');
+  if (greet) greet.textContent = greetText(d);
+}
+
 async function pollReminders() {
   try {
     const r = await api.get('/api/reminders');
@@ -2727,6 +3039,131 @@ function setView(view) {
 }
 
 /* ------------------------------ 重复（例行系列） ------------------------------ */
+/* ------------------------------ 速记视图 ------------------------------ */
+function memoRow(m) {
+  const row = el('article', { class: 'memo', 'data-id': m.id });
+  const bodyBox = el('div', { class: 'memo-body' });
+  const paintBody = () => {
+    bodyBox.innerHTML = '';
+    if (m._editing) {
+      const ta = el('textarea', {
+        class: 'memo-edit',
+        rows: String(Math.min(10, Math.max(2, m.body.split('\n').length))),
+        'aria-label': '编辑速记',
+      });
+      ta.value = m.body;
+      let done = false;
+      const save = async () => {
+        if (done) return;
+        done = true;
+        const next = ta.value.trim();
+        m._editing = false;
+        if (!next || next === m.body) { paintBody(); return; }
+        try {
+          await api.patch(`/api/memos/${m.id}`, { patch: { body: next }, rev: m.rev });
+          await loadMemos();
+          renderAll();
+        } catch (err) { showErr(err); }
+      };
+      ta.addEventListener('blur', save);
+      ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { done = true; m._editing = false; e.stopPropagation(); ta.blur(); loadMemos().then(renderAll); }
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ta.blur(); }
+      });
+      bodyBox.append(ta);
+      setTimeout(() => ta.focus(), 0);
+      return;
+    }
+    bodyBox.append(el('div', {
+      class: 'memo-text',
+      text: m.body,
+      title: '点击修改',
+      onclick: () => { m._editing = true; paintBody(); },
+    }));
+  };
+  paintBody();
+
+  const meta = el('div', { class: 'memo-meta' },
+    el('span', { class: 'memo-time', text: memoTime(m.created_at) }),
+    el('span', { class: 'memo-acts' },
+      el('button', {
+        class: `memo-act${m.pinned ? ' on' : ''}`,
+        title: m.pinned ? '取消置顶' : '置顶',
+        text: '📌',
+        onclick: async (e) => {
+          e.stopPropagation();
+          try {
+            await api.patch(`/api/memos/${m.id}`, { patch: { pinned: !m.pinned }, rev: m.rev });
+            await loadMemos();
+            renderAll();
+          } catch (err) { showErr(err); }
+        },
+      }),
+      el('button', {
+        class: 'memo-act',
+        title: '转成待办（正文第一行做标题）',
+        text: '转成待办',
+        onclick: (e) => { e.stopPropagation(); memoToTask(m); },
+      }),
+      el('button', {
+        class: 'memo-act danger',
+        title: '删除',
+        text: '✕',
+        onclick: async (e) => {
+          e.stopPropagation();
+          try {
+            await api.del(`/api/memos/${m.id}`);
+            await loadMemos();
+            renderAll();
+            toast('速记已删除', {
+              actionLabel: '撤销',
+              onAction: async () => {
+                try { await api.post(`/api/memos/${m.id}/restore`, {}); await loadMemos(); renderAll(); } catch (err) { showErr(err); }
+              },
+            });
+          } catch (err) { showErr(err); }
+        },
+      })));
+
+  row.append(bodyBox, meta);
+  return row;
+}
+
+function renderMemo() {
+  const list = $('#list');
+  list.innerHTML = '';
+  const rows = state.memos || [];
+  const search = el('input', {
+    class: 'memo-search',
+    id: 'memoSearch',
+    placeholder: '搜速记里的字…',
+    'aria-label': '搜索速记',
+  });
+  search.value = state.memoQ;
+  search.addEventListener('input', debounce(() => {
+    state.memoQ = search.value.trim();
+    loadMemos().then(renderAll);
+  }, 220));
+  list.append(el('div', { class: 'memo-head' }, search,
+    el('span', { class: 'memo-count', text: rows.length ? `${rows.length} 条` : '' })));
+
+  if (!rows.length) {
+    const box = el('div', { class: 'memo-empty' });
+    box.append(
+      el('strong', { text: state.memoQ ? '没有匹配的速记' : '还没有速记' }),
+      el('div', {
+        text: state.memoQ
+          ? '换个词试试，或者清空搜索框看全部。'
+          : '上面那条「速记」输入框，随手写一句回车就存在这里。它不会变成待办，也不会催你；哪天想做了，点「转成待办」。',
+      }));
+    list.append(box);
+    return;
+  }
+  const card = el('div', { class: 'card memo-card' });
+  for (const m of rows) card.append(memoRow(m));
+  list.append(card);
+}
+
 function renderSeries() {
   const list = $('#list');
   list.innerHTML = '';
@@ -2827,6 +3264,7 @@ function renderAll() {
   else if (state.view === 'archive') renderArchive();
   else if (state.view === 'stats') renderStats();
   else if (state.view === 'calendar') renderCalendarView();
+  else if (state.view === 'memo') renderMemo();
   renderStatusBar();
   document.body.querySelector('.body').classList.toggle('no-detail', !state.selectedId);
   renderDetail();
@@ -2843,6 +3281,18 @@ function syncDetailSnapshot() {
 function bindEvents() {
   // 唯一的添加入口：直接开完整表单（分类/日期/优先级/例行都在里面）
   $('#qaAdd').addEventListener('click', () => openNewTaskModal());
+  // 速记：回车即走，不打断手上动作
+  $('#captureForm')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    captureQuick($('#captureInput')?.value);
+  });
+  // 速记框里 Esc 直接退出：不进全局 Esc 的层级逻辑，也不清空已经写了一半的字
+  $('#captureInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.target.blur();
+    }
+  });
   $('#btnAddSeries').addEventListener('click', () => openNewTaskModal({ recurring: true }));
   $('#searchTrigger').addEventListener('click', openPalette);
   $('#btnAddCat').addEventListener('click', () => openCategoryModal());
@@ -2917,6 +3367,45 @@ function bindEvents() {
     if (!inField && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'n') {
       e.preventDefault();
       openNewTaskModal();
+      return;
+    }
+    // 键盘流：C 速记、/ 搜索、E 完成、P 置顶、Del 删除、[ ] 上下选择
+    if (inField || e.ctrlKey || e.altKey || e.metaKey) return;
+    // 弹窗开着时不吃这些键；用真实存在的遮罩判断，别用 #modalRoot 里有没有残留节点
+    if (state.overlay || $('.modal-mask')) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === 'c') {
+      const input = $('#captureInput');
+      if (input && !$('#captureForm').hidden) {
+        e.preventDefault();
+        input.focus();
+      }
+      return;
+    }
+    if (key === '/') {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
+    const sel = state.detail?.task;
+    if (key === 'e' && sel) {
+      e.preventDefault();
+      completeTask(sel);
+      return;
+    }
+    if (key === 'p' && sel) {
+      e.preventDefault();
+      togglePin(sel);
+      return;
+    }
+    if (key === 'Delete' && sel) {
+      e.preventDefault();
+      deleteTask(sel);
+      return;
+    }
+    if (key === '[' || key === ']') {
+      e.preventDefault();
+      moveSelection(key === ']' ? 1 : -1);
     }
   });
 
@@ -2961,6 +3450,8 @@ function bindEvents() {
     // 到期提醒：20 秒一轮，服务端用 remind_fired 抢占，托盘和页面不会重复弹
     pollReminders();
     setInterval(pollReminders, 20000);
+    // 聚焦页的时钟每秒走一格（不在这个视图时代价只有一次判断）
+    setInterval(tickFocusClock, 1000);
   } catch (err) {
     console.error(err);
     document.body.innerHTML = `<div style="padding:40px;font-family:sans-serif;color:#B91C1C">启动失败：${err.message}</div>`;

@@ -387,6 +387,30 @@ async function main() {
     ok('能打开系列里的一期', detailSeries.open === true, JSON.stringify(detailSeries));
     ok('详情里有例行回溯入口', detailSeries.hasRecur === true);
 
+    // ---- v1.6 键盘流（真浏览器才有焦点，所以放这里） ----
+    await cdp.eval(`document.querySelector('#detail .d-close')?.click()`);
+    await cdp.eval(`document.querySelector('#navViews button:nth-child(1)').click()`);
+    await sleep(900);
+    await cdp.eval(`document.body.click()`);
+    await sleep(150);
+    await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true }))`);
+    await sleep(250);
+    ok('按 C 把焦点送进速记框',
+      await cdp.eval(`document.activeElement && document.activeElement.id`) === 'captureInput',
+      String(await cdp.eval(`document.activeElement && (document.activeElement.id || document.activeElement.tagName)`)));
+
+    // 速记框里有焦点时 / 应该当普通字符输入，所以先按 Esc 退出输入框
+    await cdp.eval(`document.getElementById('captureInput').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(200);
+    ok('速记框里按 Esc 退出输入', await cdp.eval(`document.activeElement && document.activeElement.id`) !== 'captureInput',
+      String(await cdp.eval(`document.activeElement && (document.activeElement.id || document.activeElement.tagName)`)));
+    await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }))`);
+    await sleep(400);
+    ok('按 / 打开搜索面板', await cdp.eval(`!document.getElementById('palette').hidden`) === true);
+    await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(300);
+    ok('Esc 关掉搜索面板', await cdp.eval(`document.getElementById('palette').hidden`) === true);
+
     ok('页面全程无未捕获异常', errors.length === 0, errors.map((e) => String(e).split('\n')[0]).join(' | '));
   } finally {
     close();

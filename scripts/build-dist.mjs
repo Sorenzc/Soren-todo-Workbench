@@ -11,7 +11,8 @@ const BUILD = path.join(ROOT, 'build');
 const OUT = path.join(BUILD, 'out');
 const DIST = path.join(ROOT, 'dist');
 const NAME = '待办工作台';
-const VERSION = '1.5.0';
+// 版本只在 package.json 里改一处，打包脚本跟着走
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 // 便携版目录放在 build/ 下：dist 只放要发给同事的成品（exe / 安装包 / zip / 使用说明）
 const PORTABLE = path.join(BUILD, 'portable', NAME);
 const CSC = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';

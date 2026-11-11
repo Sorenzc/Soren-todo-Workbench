@@ -602,6 +602,37 @@ async function main() {
   const weeklyBack = await api('GET', `/api/tasks?status=open&limit=200&q=${encodeURIComponent(weekTitle)}`);
   ok('恢复后活行回来且日期不早于今天', (weeklyBack.data.tasks || []).length === 1 && weeklyBack.data.tasks[0].due_on >= today, JSON.stringify((weeklyBack.data.tasks || []).map((t) => t.due_on)));
 
+  // ---------------- 速记（独立一库） ----------------
+  const memoMark = `冒烟：速记 ${Date.now()}`;
+  const memoNew = await api('POST', '/api/memos', { body: memoMark });
+  ok('速记能创建', memoNew.status === 201 && memoNew.data.memo.body === memoMark, String(memoNew.status));
+  const memoId = memoNew.data.memo.id;
+  ok('速记默认未置顶且 rev=1', memoNew.data.memo.pinned === 0 && memoNew.data.memo.rev === 1);
+  const memoList = await api('GET', `/api/memos?q=${encodeURIComponent('冒烟：速记')}`);
+  ok('速记列表能按正文搜到', (memoList.data.memos || []).some((m) => m.id === memoId));
+  ok('bootstrap 里带速记条数', typeof (await api('GET', '/api/bootstrap')).data.counts.memos === 'number');
+
+  const memoPatched = await api('PATCH', `/api/memos/${memoId}`, { patch: { body: `${memoMark}（改过）` }, rev: 1 });
+  ok('速记能改正文', memoPatched.status === 200 && memoPatched.data.memo.rev === 2, String(memoPatched.status));
+  const memoStale = await api('PATCH', `/api/memos/${memoId}`, { patch: { body: 'x' }, rev: 1 });
+  ok('速记旧 rev 会 409', memoStale.status === 409, String(memoStale.status));
+  const memoPinned = await api('PATCH', `/api/memos/${memoId}`, { patch: { pinned: true }, rev: 2 });
+  ok('速记能置顶', memoPinned.data.memo.pinned === 1);
+  const memoTop = await api('GET', '/api/memos?limit=50');
+  ok('置顶的速记排最前', (memoTop.data.memos || [])[0]?.id === memoId);
+
+  ok('空速记被拒 400', (await api('POST', '/api/memos', { body: '   ' })).status === 400);
+  ok('超长速记被拒 400', (await api('POST', '/api/memos', { body: 'x'.repeat(4001) })).status === 400);
+
+  ok('速记能软删', (await api('DELETE', `/api/memos/${memoId}`)).status === 200);
+  const memoGone = await api('GET', `/api/memos?q=${encodeURIComponent('冒烟：速记')}`);
+  ok('删除后列表看不到', !(memoGone.data.memos || []).some((m) => m.id === memoId));
+  ok('速记能恢复', (await api('POST', `/api/memos/${memoId}/restore`, {})).status === 200);
+  const memoBack = await api('GET', `/api/memos?q=${encodeURIComponent('冒烟：速记')}`);
+  ok('恢复后又能看到', (memoBack.data.memos || []).some((m) => m.id === memoId));
+  ok('速记能彻底删除', (await api('POST', `/api/memos/${memoId}/purge`, {})).status === 200);
+  ok('彻底删除后查详情 404', (await api('GET', `/api/memos/${memoId}`)).status === 404);
+
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);
   for (const sid of createdSeries) {

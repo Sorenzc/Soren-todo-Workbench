@@ -125,6 +125,15 @@ export function openDb(cfg) {
       'daily and weekly series'
     );
   }
+  // v7：速记独立成库（便签/备忘录），和 task 完全分开
+  if (current < 7) {
+    db.exec('PRAGMA user_version = 7');
+    db.prepare('INSERT OR IGNORE INTO schema_migration (version, applied_at, note) VALUES (?,?,?)').run(
+      7,
+      nowIso(),
+      'memo notes'
+    );
+  }
   seed(db);
   return db;
 }

@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,8 +40,18 @@ function addDaysLocal(ymd, n) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// 冒烟永远跑在临时数据目录里：不碰 data/workbench.db，也不会把 data/server.pid 写脏
+// （以前共用真实目录，跑完一次冒烟，正在运行的服务 pidfile 就被覆盖了）
+const smokeDir = path.join(os.tmpdir(), `wb-smoke-${process.pid}`);
+const smokeCfg = {
+  dbPath: path.join(smokeDir, 'workbench.db'),
+  archiveRoot: path.join(smokeDir, 'archive'),
+  backupRoot: path.join(smokeDir, 'backups'),
+  log: path.join(smokeDir, 'server.log'),
+};
+
 function readToken() {
-  const f = path.join(root, 'data', 'token.txt');
+  const f = path.join(smokeDir, 'token.txt');
   return fs.readFileSync(f, 'utf8').trim();
 }
 
@@ -83,10 +94,18 @@ async function startServer() {
   base = `http://127.0.0.1:${port}`;
   child = spawn(process.execPath, [path.join(root, 'src', 'server.mjs')], {
     cwd: root,
-    env: { ...process.env, WB_PORT: String(port), WB_NO_OPEN: '1' },
+    env: {
+      ...process.env,
+      WB_PORT: String(port),
+      WB_NO_OPEN: '1',
+      WB_DB: smokeCfg.dbPath,
+      WB_ARCHIVE: smokeCfg.archiveRoot,
+      WB_BACKUP: smokeCfg.backupRoot,
+      WB_LOG: smokeCfg.log,
+    },
     stdio: 'ignore',
   });
-  if (!fs.existsSync(path.join(root, 'data', 'token.txt'))) {
+  if (!fs.existsSync(path.join(smokeDir, 'token.txt'))) {
     await new Promise((r) => setTimeout(r, 400));
   }
   token = readToken();
@@ -196,8 +215,9 @@ async function main() {
   });
   ok('PATCH 成功且 rev+1', patchOk.status === 200 && patchOk.data.task.rev === detail.data.task.rev + 1);
 
-  // 关联文件夹
-  const linkDir = path.join(root, 'archive');
+  // 关联文件夹（用临时目录，别把真实归档目录挂到测试任务上）
+  const linkDir = path.join(smokeDir, 'link-target');
+  fs.mkdirSync(linkDir, { recursive: true });
   const link = await api('POST', `/api/tasks/${tToday.data.task.id}/links`, {
     path: linkDir,
     kind: 'folder',
@@ -218,7 +238,7 @@ async function main() {
   const done = await api('POST', `/api/tasks/${tToday.data.task.id}/complete`, { done_note: '冒烟完成' });
   ok('完成任务 200', done.status === 200 && done.data?.task?.status === 'done');
   ok('完成写入归档相对路径', /^\d{4}\/\d{4}-\d{2}\//.test(done.data?.task?.archived_path || ''));
-  const archiveAbs = path.join(root, 'archive', done.data.task.archived_path || '');
+  const archiveAbs = path.join(smokeCfg.archiveRoot, done.data.task.archived_path || '');
   ok('归档 Markdown 真实存在', fs.existsSync(archiveAbs), archiveAbs);
   if (fs.existsSync(archiveAbs)) {
     const md = fs.readFileSync(archiveAbs, 'utf8');
@@ -456,7 +476,7 @@ async function main() {
   ok('父任务写出归档文件', Boolean(archiveRel), archiveRel);
   let mdText = '';
   try {
-    mdText = fs.readFileSync(path.join(root, 'archive', (archiveRel || '').split('/').join(path.sep)), 'utf8');
+    mdText = fs.readFileSync(path.join(smokeCfg.archiveRoot, (archiveRel || '').split('/').join(path.sep)), 'utf8');
   } catch {
     mdText = '';
   }
@@ -633,6 +653,73 @@ async function main() {
   ok('速记能彻底删除', (await api('POST', `/api/memos/${memoId}/purge`, {})).status === 200);
   ok('彻底删除后查详情 404', (await api('GET', `/api/memos/${memoId}`)).status === 404);
 
+  // ---------- v1.8：维护体检 / 归档搜索 / 批量改期 / 稍后提醒 / 跳过一期 ----------
+  const mt = await api('GET', '/api/maintenance');
+  ok('体检接口可用', mt.status === 200 && mt.data.db && mt.data.archive);
+  ok('体检报告数据库完整', mt.data.db.integrity === 'ok', mt.data.db.integrity);
+  ok('体检报告带归档文件数', typeof mt.data.archive.files === 'number');
+
+  // 造一个孤儿归档：直接往 archive 目录里写一个没人引用的 md
+  const orphanRel = `1999${'/'}1999-01/1999-01-01__冒烟孤儿__deadbeef.md`;
+  const archiveRoot = smokeCfg.archiveRoot;
+  const orphanAbs = path.join(archiveRoot, orphanRel.split('/').join(path.sep));
+  fs.mkdirSync(path.dirname(orphanAbs), { recursive: true });
+  fs.writeFileSync(orphanAbs, '# 冒烟孤儿\n\n这段文字没有对应的任务。\n', 'utf8');
+  const mt2 = await api('GET', '/api/maintenance');
+  ok('体检能看到孤儿归档', (mt2.data.archive.orphans || []).some((o) => o.rel === orphanRel));
+  const clean = await api('POST', '/api/maintenance/clean-orphans', {});
+  ok('清理孤儿归档成功', clean.status === 200 && clean.data.removed >= 1, JSON.stringify(clean.data));
+  ok('孤儿文件确实被删', !fs.existsSync(orphanAbs));
+
+  // 归档搜索：刚才完成的那条任务已经写了 md
+  const found = await api('GET', `/api/archive/search?q=${encodeURIComponent('冒烟：父任务')}`);
+  ok('归档搜索能搜到已完成的任务', found.status === 200 && (found.data.items || []).length > 0, JSON.stringify(found.data));
+  const foundNone = await api('GET', `/api/archive/search?q=${encodeURIComponent('这个词肯定不存在zzz')}`);
+  ok('归档搜索搜不到时返回空', foundNone.status === 200 && (foundNone.data.items || []).length === 0);
+  ok('归档搜索空词返回空', ((await api('GET', '/api/archive/search?q=')).data.items || []).length === 0);
+
+  // 批量改期：两条逾期一起推到今天
+  const rsA = await api('POST', '/api/tasks', { title: '冒烟：改期甲', dueOn: addDaysLocal(today, -3), categoryId: 'cat-inbox' });
+  const rsB = await api('POST', '/api/tasks', { title: '冒烟：改期乙', dueOn: addDaysLocal(today, -2), categoryId: 'cat-inbox' });
+  const rsIds = [rsA.data.task.id, rsB.data.task.id];
+  createdTasks.push(...rsIds);
+  const bulkMoved = await api('POST', '/api/tasks/bulk-reschedule', { ids: rsIds, dueOn: today });
+  ok('批量改期返回更新条数', bulkMoved.status === 200 && bulkMoved.data.updated === 2, JSON.stringify(bulkMoved.data));
+  const movedA = await api('GET', `/api/tasks/${rsIds[0]}`);
+  ok('批量改期真的改了日期', movedA.data.task.due_on === today, movedA.data.task.due_on);
+  ok('批量改期空数组 400', (await api('POST', '/api/tasks/bulk-reschedule', { ids: [], dueOn: today })).status === 400);
+  ok('批量改期坏日期 400', (await api('POST', '/api/tasks/bulk-reschedule', { ids: rsIds, dueOn: '2026-13-45' })).status === 400);
+
+  // 稍后提醒：要求往后推 remind_at 并重新武装
+  const snTask = await api('POST', '/api/tasks', {
+    title: '冒烟：稍后提醒', dueOn: today, categoryId: 'cat-inbox', remindAt: `${today}T08:00`,
+  });
+  const snId = snTask.data.task.id;
+  createdTasks.push(snId);
+  const sn = await api('POST', `/api/tasks/${snId}/snooze`, { minutes: 10 });
+  ok('稍后提醒成功', sn.status === 200 && !!sn.data.remind_at, JSON.stringify(sn.data));
+  ok('稍后提醒推到了未来', sn.data.remind_at > `${today}T08:00`, sn.data.remind_at);
+  ok('稍后提醒后 remind_fired 归零', sn.data.task.remind_fired === 0);
+  ok('稍后提醒时长越界 400', (await api('POST', `/api/tasks/${snId}/snooze`, { minutes: 0 })).status === 400);
+
+  // 跳过一期：只对每天 / 每周的滚动系列有意义
+  const skipSeries = await api('POST', '/api/tasks', {
+    title: '冒烟：跳过一期', recurrence: { rule: 'daily', start_date: today, interval_n: 1 },
+  });
+  const skipId = skipSeries.data.series.id;
+  createdSeries.push(skipId);
+  const firstOn = skipSeries.data.task.due_on;
+  const skipped = await api('POST', `/api/series/${skipId}/skip`, {});
+  ok('跳过一期成功', skipped.status === 200 && skipped.data.next > firstOn, JSON.stringify(skipped.data));
+  const skipList = await api('GET', `/api/series/${skipId}`);
+  const liveRow = (skipList.data.tasks || []).find((t) => t.status === 'open');
+  ok('跳过之后活行日期前进', !!liveRow && liveRow.due_on === skipped.data.next, liveRow && liveRow.due_on);
+  const monthSeries = await api('POST', '/api/tasks', {
+    title: '冒烟：每月不可跳', recurrence: { rule: 'monthly', day_of_month: 15, horizon_months: 1 },
+  });
+  createdSeries.push(monthSeries.data.series.id);
+  ok('每月例行跳过被拒 400', (await api('POST', `/api/series/${monthSeries.data.series.id}/skip`, {})).status === 400);
+
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);
   for (const sid of createdSeries) {
@@ -667,7 +754,7 @@ async function main() {
         const mm = await api('GET', `/api/archive/month?ym=${encodeURIComponent(m.ym)}`);
         for (const t of mm.data.tasks || []) {
           if (String(t.title || '').startsWith('冒烟')) {
-            const abs = path.join(root, 'archive', t.archived_path || '');
+            const abs = path.join(smokeCfg.archiveRoot, t.archived_path || '');
             if (t.archived_path && fs.existsSync(abs)) fs.rmSync(abs, { force: true });
           }
         }
@@ -688,7 +775,7 @@ async function main() {
         else if (name.endsWith('.md') && name.includes('冒烟')) fs.rmSync(p, { force: true });
       }
     };
-    walk(path.join(root, 'archive'));
+    walk(smokeCfg.archiveRoot);
   } catch {
     /* ignore */
   }
@@ -701,6 +788,7 @@ try {
   failures.push(`脚本异常：${err && err.stack ? err.stack.split('\n')[0] : err}`);
 } finally {
   cleanup();
+  try { fs.rmSync(smokeDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
 const total = pass + fail;

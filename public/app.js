@@ -124,14 +124,26 @@ const state = {
   // 速记（独立一库）：列表与搜索词
   memos: [],
   memoQ: '',
+  // 归档搜索词（只在内存里，不落盘）
+  arcQ: '',
 };
 
 /* ------------------------------ Toast ------------------------------ */
 function toast(msg, opts = {}) {
   const root = $('#toasts');
+  const actions = Array.isArray(opts.actions) ? opts.actions : [];
   const box = el('div', { class: 'toast' },
     el('span', { class: 'toast-msg', text: msg }),
-    opts.actionLabel ? el('button', { text: opts.actionLabel, onclick: () => { opts.onAction?.(); dismiss(); } }) : null,
+    actions.length
+      ? el('span', { class: 'toast-actions' }, ...actions.map((a) =>
+          el('button', {
+            text: a.label,
+            onclick: () => { a.onClick?.(); dismiss(); },
+          })
+        ))
+      : opts.actionLabel
+        ? el('button', { text: opts.actionLabel, onclick: () => { opts.onAction?.(); dismiss(); } })
+        : null,
     el('button', { class: 'toast-close', text: '✕', onclick: () => dismiss() })
   );
   root.append(box);
@@ -623,7 +635,7 @@ function renderSeriesSidebar() {
       },
         el('span', { class: 'cat-dot', style: { '--c': 'var(--accent, #2563EB)' } }),
         el('span', { class: 'cat-name', text: s.title }),
-        el('span', { class: 'cat-n', text: `每月${s.day_of_month}` })
+        el('span', { class: 'cat-n', text: s.rule === 'monthly' ? `每月${s.day_of_month}` : (s.rule_label || '') })
       )
     ));
   }
@@ -968,6 +980,12 @@ function renderToday() {
     const head = groupHead('逾期', overdue.length, 'overdue', '');
     head.append(el('button', {
       class: 'btn small ghost', style: { marginLeft: 'auto' },
+      text: `全推到明天`,
+      onclick: () => pushOverdueTo(overdue, addDays(todayStr(), 1)),
+    }));
+    head.append(el('button', {
+      class: 'btn small ghost',
+      style: { marginLeft: '8px' },
       text: `一键完成 ${overdue.length} 条`,
       onclick: () => completeOverdue(overdue),
     }));
@@ -1012,6 +1030,24 @@ async function completeOverdue(items) {
 }
 
 const SORT_LABEL = { score: '智能', due: '到期时间', priority: '优先级', created: '创建时间' };
+
+/**
+ * 逾期批量改期：不完成，只是整体挪到某一天。
+ * 比「全完成」温柔，也比一条条点日期快。
+ */
+async function pushOverdueTo(items, date) {
+  const list = [...items];
+  if (!list.length) return;
+  const sure = window.confirm(`把这 ${list.length} 条逾期挪到 ${date}？改期不会动完成状态。`);
+  if (!sure) return;
+  try {
+    const r = await api.post('/api/tasks/bulk-reschedule', { ids: list.map((t) => t.id), dueOn: date });
+    await refresh();
+    toast(`已挪到 ${date}：${r.updated} 条${r.failed && r.failed.length ? `，${r.failed.length} 条没挪成` : ''}`);
+  } catch (err) {
+    toast(`改期失败：${err.message}`);
+  }
+}
 
 /**
  * 七段分组：置顶 → 逾期 → 今天 → 本周 → 本月 → 以后 → 无日期。
@@ -1182,9 +1218,62 @@ function renderDay() {
   list.append(rowCard(items));
 }
 
+/**
+ * 归档搜索：归档本来就是普通 Markdown，所以直接 grep 文件，不需要额外索引。
+ * 输入停 300ms 再查，避免每敲一个字都扫一遍目录。
+ */
+function archiveSearchBar() {
+  const wrap = el('div', { class: 'arc-search' });
+  const input = el('input', {
+    id: 'arcSearch', type: 'search', placeholder: '在归档的 Markdown 里搜一句话…',
+    value: state.arcQ || '',
+  });
+  const result = el('div', { class: 'arc-result' });
+  const run = debounce(async (q) => {
+    state.arcQ = q;
+    result.innerHTML = '';
+    if (!q.trim()) return;
+    try {
+      const r = await api.get('/api/archive/search?q=' + encodeURIComponent(q) + '&limit=40');
+      if (!r.items.length) {
+        result.append(el('div', { class: 'arc-none', text: `没有找到「${q}」` }));
+        return;
+      }
+      result.append(el('div', { class: 'arc-count', text: `找到 ${r.total} 篇${r.truncated ? '（只显示前 40）' : ''}` }));
+      for (const it of r.items) {
+        result.append(el('button', {
+          class: 'arc-hit',
+          onclick: () => openArchiveFile(it.rel),
+        },
+          el('span', { class: 'arc-hit-t', text: it.title }),
+          el('span', { class: 'arc-hit-m', text: [it.date, it.kind === 'index' ? '月度索引' : ''].filter(Boolean).join(' · ') }),
+          it.snippet ? el('span', { class: 'arc-hit-s', text: it.snippet }) : null
+        ));
+      }
+    } catch (err) {
+      result.append(el('div', { class: 'arc-none', text: `搜索失败：${err.message}` }));
+    }
+  }, 300);
+  input.addEventListener('input', () => run(input.value));
+  if (state.arcQ) run(state.arcQ);
+  wrap.append(el('span', { class: 'arc-tag', text: '归档搜索' }), input);
+  wrap.append(result);
+  return wrap;
+}
+
+async function openArchiveFile(rel) {
+  try {
+    await api.post('/api/archive/open', { rel });
+    toast('已在文件夹里定位到这篇归档');
+  } catch (err) {
+    toast(`打不开：${err.message}`);
+  }
+}
+
 async function renderArchive() {
   const list = $('#list');
   list.innerHTML = '';
+  list.append(archiveSearchBar());
   if (!state.archiveTree) await loadArchive();
   const tree = state.archiveTree;
   if (!tree || !tree.years?.length) {
@@ -2819,6 +2908,75 @@ function openCategoryModal(cat) {
   });
 }
 
+async function openMaintenance() {
+  let info;
+  try {
+    info = await api.get('/api/maintenance');
+  } catch (err) {
+    toast(`体检失败：${err.message}`);
+    return;
+  }
+  openModal((modal, close) => {
+    modal.classList.add('wide');
+    const row = (label, value, hint) => el('div', { class: 'mnt-row' },
+      el('span', { class: 'mnt-k', text: label }),
+      el('span', { class: 'mnt-v', text: value }),
+      hint ? el('span', { class: 'mnt-h', text: hint }) : null
+    );
+    const orphanList = info.archive.orphans.length
+      ? el('div', { class: 'mnt-list' }, ...info.archive.orphans.slice(0, 12).map((o) =>
+          el('div', { class: 'mnt-item', text: o.rel })))
+      : el('div', { class: 'hint', text: '没有孤儿文件' });
+    const missingList = info.archive.missing.length
+      ? el('div', { class: 'mnt-list' }, ...info.archive.missing.slice(0, 12).map((o) =>
+          el('div', { class: 'mnt-item', text: `${o.title} · ${o.rel}` })))
+      : el('div', { class: 'hint', text: '每个已完成任务都有归档文件' });
+
+    modal.append(
+      el('h2', { text: '体检与清理' }),
+      el('div', { class: 'hint', text: '只读检查；清理需要你点按钮确认。' }),
+      el('div', { class: 'mnt-card' },
+        row('数据库', `${info.db.size_mb} MB`, `WAL ${info.db.wal_size_mb} MB · 完整性 ${info.db.integrity}`),
+        row('归档', `${info.archive.files} 个文件 / ${info.archive.size_mb} MB`, '普通 Markdown，直接复制走就是备份'),
+        row('待办', `未完成 ${info.tasks.open} · 已完成 ${info.tasks.done} · 已删 ${info.tasks.deleted}`, `速记 ${info.tasks.memos} 条`),
+        row('失效关联', `${info.links.missing} 个`, '文件被移动或删掉后，关联会标成「丢失」'),
+        row('服务进程', info.pid.pid ? `${info.pid.pid}${info.pid.alive ? '（在跑）' : '（已退出）'}` : '没有 pidfile', 'pidfile 过期不影响使用，只会让停止脚本多找一次'),
+        row('备份', `${info.backups.length} 份`, info.backups[0] ? `最近：${info.backups[0].name}` : '还没备份过')
+      ),
+      el('div', { class: 'm-field' },
+        el('label', { text: `孤儿归档（${info.archive.orphans.length}）` }),
+        el('div', { class: 'hint' }, '库里的任务已经没了，但文件还留在 archive 目录里。'),
+        orphanList,
+        info.archive.orphans.length
+          ? el('button', {
+              class: 'btn',
+              text: `删掉这 ${info.archive.orphans.length} 个孤儿文件`,
+              onclick: async () => {
+                if (!window.confirm(`确定删掉 ${info.archive.orphans.length} 个孤儿归档文件？删了就找不回来了。`)) return;
+                try {
+                  const r = await api.post('/api/maintenance/clean-orphans', {});
+                  toast(`已清理 ${r.removed} 个${r.failed.length ? `，${r.failed.length} 个没删成` : ''}`);
+                  close();
+                  openMaintenance();
+                } catch (err) { showErr(err); }
+              },
+            })
+          : null
+      ),
+      el('div', { class: 'm-field' },
+        el('label', { text: `缺失归档（${info.archive.missing.length}）` }),
+        el('div', { class: 'hint' }, '任务还在、但标记的归档文件不在了；重新完成一次或点「重新生成归档」可以补齐。'),
+        missingList
+      ),
+      el('div', { class: 'm-actions' },
+        el('button', { class: 'btn', text: '重新检查', onclick: () => { close(); openMaintenance(); } }),
+        el('button', { class: 'btn', text: '打开归档目录', onclick: () => api.post('/api/open-directory', { target: 'archive' }).catch(showErr) }),
+        el('button', { class: 'btn primary', text: '关闭', onclick: close })
+      )
+    );
+  });
+}
+
 function openSettings() {
   openModal((modal, close) => {
     modal.classList.add('wide');
@@ -2855,6 +3013,7 @@ function openSettings() {
       ),
       el('div', { class: 'm-actions' },
         el('button', { class: 'btn', text: '立即备份', onclick: doBackup }),
+        el('button', { class: 'btn', text: '体检与清理', title: '看看库里、归档里有没有对不上的地方', onclick: () => { close(); openMaintenance(); } }),
         el('button', { class: 'btn', text: '重新生成归档', onclick: rerenderArchive }),
         el('button', { class: 'btn', text: '打开数据目录', onclick: () => api.post('/api/open-directory', { target: 'data' }).catch(showErr) }),
         el('button', { class: 'btn primary', text: '保存', onclick: async () => {
@@ -2999,7 +3158,14 @@ async function pollReminders() {
 }
 
 function notifyReminder(item) {
-  toast(`⏰ ${item.title}`, { ms: 9000, actionLabel: '打开', onAction: () => selectTask(item.id) });
+  toast(`⏰ ${item.title}`, {
+    ms: 9000,
+    actions: [
+      { label: '稍后 10 分钟', onClick: () => snoozeReminder(item.id, 10) },
+      { label: '稍后 1 小时', onClick: () => snoozeReminder(item.id, 60) },
+      { label: '打开', onClick: () => selectTask(item.id) },
+    ],
+  });
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     const when = item.remind_at ? item.remind_at.replace('T', ' ') : '';
@@ -3009,6 +3175,19 @@ function notifyReminder(item) {
     n.onclick = () => { window.focus(); selectTask(item.id); n.close(); };
   } catch {
     /* 浏览器不支持系统通知时，页面 toast 已经提示过了 */
+  }
+}
+
+async function snoozeReminder(id, minutes) {
+  try {
+    const r = await api.post(`/api/tasks/${id}/snooze`, { minutes });
+    if (state.detail?.task?.id === id) {
+      state.detail.task.remind_at = r.remind_at;
+      renderDetail();
+    }
+    toast(`好的，${minutes >= 60 ? `${Math.round(minutes / 60)} 小时后` : `${minutes} 分钟后`}再提醒你`);
+  } catch (err) {
+    toast(`没改成：${err.message}`);
   }
 }
 
@@ -3198,6 +3377,13 @@ function renderSeries() {
         off
           ? el('button', { class: 'tool-btn', text: '恢复', onclick: () => seriesAction(s, 'resume') })
           : el('button', { class: 'tool-btn', text: '取消未来', title: '今天之后的期作废，已完成的保留', onclick: () => seriesAction(s, 'cancel') }),
+        !off && s.rule !== 'monthly'
+          ? el('button', {
+              class: 'tool-btn', text: '跳过这一期',
+              title: '这一期不做了，系列继续往后滚（不会留下已完成记录）',
+              onclick: () => seriesAction(s, 'skip'),
+            })
+          : null,
         el('button', { class: 'tool-btn danger-text', text: '删除', title: '连同所有期一起删掉', onclick: () => seriesAction(s, 'delete') })
       )
     ));
@@ -3235,6 +3421,15 @@ async function seriesAction(s, kind) {
     try {
       const r = await api.post(`/api/series/${s.id}/cancel`, { scope: 'future' });
       toast(`已取消 ${r.cancelled} 期`);
+      await loadSeries();
+      refresh();
+    } catch (err) { showErr(err); }
+    return;
+  }
+  if (kind === 'skip') {
+    try {
+      const r = await api.post(`/api/series/${s.id}/skip`, {});
+      toast(`这一期（${r.skipped}）跳过，下一期 ${r.next}`);
       await loadSeries();
       refresh();
     } catch (err) { showErr(err); }

@@ -18,6 +18,7 @@ import * as T from './tasks.mjs';
 import * as S from './series.mjs';
 import * as A from './archive.mjs';
 import * as M from './memos.mjs';
+import * as MT from './maintenance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // 版本号只有一个来源：package.json（安装包、/api/health、页面角标都读它）
@@ -397,6 +398,13 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, updated: n });
   }
 
+  // 逾期「全推到明天 / 本周日」：一次改一批，单条失败不中断
+  if (method === 'POST' && pathname === '/api/tasks/bulk-reschedule') {
+    const body = await readBody(req);
+    const out = tx(db, () => T.bulkReschedule(db, body.ids, body.dueOn ?? body.due_on));
+    return sendJson(res, 200, out);
+  }
+
   // ---------- 每月例行系列 ----------
   if (method === 'GET' && pathname === '/api/series') {
     return sendJson(res, 200, { series: S.listSeries(db), today: localDate() });
@@ -445,6 +453,10 @@ async function handleApi(req, res, url) {
     if (sub === 'resume' && method === 'POST') {
       return sendJson(res, 200, S.resumeSeries(db, id));
     }
+    // 跳过这一期：只在每天 / 每周的滚动系列上有意义
+    if (sub === 'skip' && method === 'POST') {
+      return sendJson(res, 200, tx(db, () => S.skipOccurrence(db, id)));
+    }
     // 彻底删掉一个例行系列（连带它生成的每一期）。界面只在「删系列」时用。
     if (!sub && method === 'DELETE') {
       const series = S.getSeries(db, id);
@@ -473,6 +485,23 @@ async function handleApi(req, res, url) {
   }
 
   if (method === 'GET' && pathname === '/api/archive/tree') return sendJson(res, 200, A.archiveTree(db));
+  // 归档全文搜索：直接在 archive/ 的 markdown 里找，不建索引
+  if (method === 'GET' && pathname === '/api/archive/search') {
+    const q = url.searchParams.get('q') || '';
+    const limit = url.searchParams.get('limit') || 40;
+    return sendJson(res, 200, A.searchArchive(cfg.archiveRoot, q, { limit }));
+  }
+  // 维护体检：只读，不改任何东西
+  if (method === 'GET' && pathname === '/api/maintenance') {
+    return sendJson(res, 200, MT.inspect(db, cfg));
+  }
+  if (method === 'POST' && pathname === '/api/maintenance/clean-orphans') {
+    const body = await readBody(req);
+    const rels = Array.isArray(body.rels) && body.rels.length ? body.rels : MT.orphanArchiveFiles(db, cfg.archiveRoot).map((f) => f.rel);
+    if (!rels.length) return sendJson(res, 200, { ok: true, removed: 0, failed: [] });
+    const result = MT.cleanArchiveOrphans(cfg.archiveRoot, rels);
+    return sendJson(res, 200, { ok: true, ...result });
+  }
   if (method === 'GET' && pathname === '/api/archive/month') {
     const ym = url.searchParams.get('ym') || localDate().slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(ym)) throw new ApiError(400, 'BAD_YM', '月份格式应为 YYYY-MM');
@@ -553,6 +582,11 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { task });
     }
     if (sub === 'restore' && method === 'POST') return sendJson(res, 200, { task: T.restoreTask(db, id) });
+    // 提醒「稍后再说」：往后推 remind_at 并重新武装 remind_fired
+    if (sub === 'snooze' && method === 'POST') {
+      const body = await readBody(req);
+      return sendJson(res, 200, tx(db, () => T.snoozeTask(db, id, body.minutes ?? body.min)));
+    }
     if (sub === 'purge' && method === 'POST') {
       const row = tx(db, () => T.purgeTask(db, id));
       if (row.archived_path) {
@@ -638,6 +672,18 @@ async function handleApi(req, res, url) {
     const target = body.target === 'backup' ? cfg.backupRoot : body.target === 'data' ? dataDir : cfg.archiveRoot;
     spawn('explorer.exe', [target], { shell: false, stdio: 'ignore', detached: true }).unref();
     return sendJson(res, 200, { ok: true, opened: target });
+  }
+  // 在资源管理器里定位某一篇归档（搜索结果的跳转）
+  if (method === 'POST' && pathname === '/api/archive/open') {
+    const body = await readBody(req);
+    const rel = String(body.rel || '');
+    const abs = path.resolve(cfg.archiveRoot, rel.split('/').join(path.sep));
+    const root = path.resolve(cfg.archiveRoot);
+    if (!rel || !abs.startsWith(root + path.sep) || !fs.existsSync(abs)) {
+      throw new ApiError(400, 'BAD_ARCHIVE_PATH', '这篇归档不在归档目录里');
+    }
+    spawn('explorer.exe', ['/select,' + abs], { shell: false, stdio: 'ignore', detached: true }).unref();
+    return sendJson(res, 200, { ok: true, opened: abs });
   }
   if (method === 'POST' && pathname === '/api/pick-folder') {
     return sendJson(res, 200, pickPath('folder'));

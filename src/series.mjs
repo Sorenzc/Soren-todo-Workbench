@@ -596,3 +596,28 @@ export function conflictIfStale(series, rev) {
     throw conflict('这个例行系列刚被改过，请刷新后重试', { current: series });
   }
 }
+
+// 「跳过这一期」：只对每天/每周的滚动系列有意义——不做这一期，但系列继续往下滚，
+// 不留下一条"已完成"的假记录（真实跳过 ≠ 完成）。
+export function skipOccurrence(db, id, today = localDate()) {
+  const series = getSeriesRow(db, id);
+  if (series.rule === 'monthly') {
+    throw bad('每月例行请直接改这一期的日期，或取消整个系列', 'BAD_RULE');
+  }
+  const live = db
+    .prepare(
+      `SELECT * FROM task WHERE series_id = ? AND deleted_at IS NULL AND status IN ('open','doing') ORDER BY due_on ASC LIMIT 1`
+    )
+    .get(id);
+  if (!live) throw notFound('这个例行暂时没有可跳过的这一期');
+  const from = live.due_on || today;
+  const next = nextRollingDate(from, series.rule, series.interval_n, today);
+  db.prepare(
+    `UPDATE task SET due_on = ?, occur_month = ?, remind_fired = 0, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?`
+  ).run(next, next.slice(0, 7), nowIso(), nowIso(), live.id);
+  db.prepare(
+    `UPDATE task_series SET next_on = ?, updated_at = ?, rev = rev + 1 WHERE id = ?`
+  ).run(next, nowIso(), id);
+  logEvent(db, live.id, 'updated', { skip: from, next });
+  return { skipped: from, next, task: db.prepare('SELECT * FROM task WHERE id = ?').get(live.id) };
+}

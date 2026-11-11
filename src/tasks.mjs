@@ -841,3 +841,45 @@ export function stats(db) {
     recentDone,
   };
 }
+
+// 批量改期：把一组待办一起挪到某天（逾期「全推到明天」用）
+// 单条失败不中断，返回 ok/failed，前端统一汇报「已挪好 N 条 / M 条没挪成」
+export function bulkReschedule(db, ids, dueOn) {
+  if (!Array.isArray(ids) || ids.length === 0) throw bad('没有要改期的待办', 'BAD_IDS');
+  if (ids.length > 200) throw bad('一次最多改 200 条', 'BAD_IDS');
+  const due = normDate(dueOn);
+  const seen = new Set();
+  let updated = 0;
+  const failed = [];
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      const row = getTask(db, id);
+      if (row.status === 'done' || row.status === 'dropped') {
+        failed.push({ id, reason: row.status });
+        continue;
+      }
+      patchTask(db, id, { dueOn: due });
+      updated += 1;
+    } catch (err) {
+      failed.push({ id, reason: String((err && err.message) || err) });
+    }
+  }
+  return { due, updated, failed, total: seen.size };
+}
+
+// 提醒「稍后再说」：把 remind_at 往后推，并把 remind_fired 重新武装
+export function snoozeTask(db, id, minutes, nowMs = Date.now()) {
+  const row = getTask(db, id);
+  const mins = Number(minutes);
+  if (!Number.isFinite(mins) || mins < 1 || mins > 1440) throw bad('稍后的时长要在 1–1440 分钟之间', 'BAD_MINUTES');
+  const next = localMinute(nowMs + Math.round(mins) * 60_000);
+  db.prepare('UPDATE task SET remind_at = ?, remind_fired = 0, updated_at = ? WHERE id = ?').run(
+    next,
+    nowIso(),
+    id
+  );
+  logEvent(db, id, 'updated', { snooze: mins, remind_at: next });
+  return { task: getTask(db, id), remind_at: next };
+}

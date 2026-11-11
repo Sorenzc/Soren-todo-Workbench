@@ -111,6 +111,21 @@ function fillNewTask() {
   f.value = 'E:\\工作资料';
 }
 
+function openMaintenance() {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  const item = [...document.querySelectorAll('#paletteList .p-item')].find((i) => /设置/.test(i.textContent || ''));
+  item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  const btn = [...document.querySelectorAll('.modal .btn')].find((b) => /体检与清理/.test(b.textContent || ''));
+  if (!btn) throw new Error('设置里没有「体检与清理」按钮');
+  btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+function searchArchive() {
+  const input = document.getElementById('arcSearch');
+  if (!input) throw new Error('归档视图没有搜索框');
+  input.value = '会议室';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 const SCENARIOS = {
   focus: { url: '/', desc: '聚焦（默认首页）' },
   dark: { url: '/?theme=dark', desc: '深色模式' },
@@ -139,6 +154,8 @@ const SCENARIOS = {
   reward: { url: '/', desc: '激励作者收款码', steps: [openReward] },
   newTaskRecur: { url: '/', desc: '新建待办：例行待办（每月某日）', steps: [openNewTaskRecur, pick28] },
   series: { url: '/?view=series', desc: '例行待办列表' },
+  archiveSearch: { url: '/?view=archive', desc: '归档全文搜索', steps: [searchArchive] },
+  maintenance: { url: '/', desc: '体检与清理', steps: [openMaintenance] },
 };
 
 async function main() {

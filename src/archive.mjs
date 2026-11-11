@@ -182,3 +182,76 @@ export function rebuildAll(db, archiveRoot) {
   }
   return { total: rows.length, ok, failed };
 }
+
+// 归档全文搜索：归档是普通 Markdown，直接在文件里找，不建索引
+// （半年后回头找「那次消防年检的回执」时，grep 一遍比什么都快）
+function walkMarkdown(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) walk(abs);
+      else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+        out.push({ rel: path.relative(root, abs).split(path.sep).join('/'), abs });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function snippetOf(text, index, len) {
+  const from = Math.max(0, index - 34);
+  const to = Math.min(text.length, index + len + 46);
+  // 去掉 markdown 记号，别让片段里全是 ### 和 | --- |
+  const line = text.slice(from, to).replace(/[#>*|]/g, ' ').replace(/\[[ xX]\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (from > 0 ? '…' : '') + line + (to < text.length ? '…' : '');
+}
+
+export function searchArchive(archiveRoot, query, opts = {}) {
+  const q = String(query || '').trim();
+  if (!q) return { q: '', total: 0, items: [], truncated: false };
+  const needle = q.toLowerCase();
+  const limit = Math.min(Math.max(Number(opts.limit) || 40, 1), 100);
+  const items = [];
+  let total = 0;
+  for (const file of walkMarkdown(archiveRoot)) {
+    let text = '';
+    let size = 0;
+    try {
+      const st = fs.statSync(file.abs);
+      size = st.size;
+      if (size > 512 * 1024) continue; // 单篇归档不可能这么大，跳过异常文件
+      text = fs.readFileSync(file.abs, 'utf8');
+    } catch {
+      continue;
+    }
+    const titleLine = (/^#\s+(.+)$/m.exec(text) || [])[1] || path.basename(file.rel, '.md');
+    const hitTitle = titleLine.toLowerCase().includes(needle);
+    const bodyIndex = text.toLowerCase().indexOf(needle);
+    if (!hitTitle && bodyIndex < 0) continue;
+    total += 1;
+    if (items.length >= limit) continue;
+    const base = path.posix.basename(file.rel);
+    items.push({
+      rel: file.rel,
+      title: titleLine.trim(),
+      kind: base.toLowerCase() === '_index.md' ? 'index' : 'task',
+      date: (base.match(/^\d{4}-\d{2}-\d{2}/) || [])[0] || (file.rel.match(/\d{4}-\d{2}/) || [])[0] || '',
+      snippet: hitTitle ? '' : snippetOf(text, bodyIndex, needle.length),
+      size,
+    });
+  }
+  items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  // 月度索引里也写着标题，会跟真正的归档重复；有任务归档命中时就不返回索引
+  const tasksOnly = items.filter((it) => it.kind === 'task');
+  const shown = tasksOnly.length ? tasksOnly : items;
+  const matched = total;
+  return { q, total: shown.length, matched, items: shown, truncated: matched > shown.length && shown.length >= limit };
+}

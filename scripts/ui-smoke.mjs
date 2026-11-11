@@ -849,6 +849,18 @@ try {
     await memoApi(`/api/memos/${m.id}/purge`, { method: 'POST', body: '{}' });
   }
 
+  // v1.8：归档搜索框
+  vm.runInContext("setView('archive')", ctx);
+  await sleep(600);
+  check('归档视图有搜索框', !!$('#arcSearch'));
+  const arcInput = $('#arcSearch');
+  if (arcInput) {
+    arcInput.value = '这个词肯定不存在zzz';
+    arcInput.dispatchEvent({ type: 'input', bubbles: true });
+    await sleep(900);
+  }
+  check('归档搜不到时给空状态', !!$('.arc-none'), ($('#list')?.textContent || '').slice(0, 80));
+
   // 清理：本段建的每日系列
   if (dailySeriesId14) await fetch(BASE + `/api/series/${dailySeriesId14}`, { method: 'DELETE', headers: { 'x-wb-token': token } });
   // 删系列不会带走已经写出的归档 md（/api/archive/tree 按库遍历看不到孤儿文件），这里顺手扫一遍

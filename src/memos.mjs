@@ -94,6 +94,14 @@ export function purgeMemo(db, id) {
   return { ok: true, id };
 }
 
+/** 回收站：软删掉的速记 */
+export function listDeletedMemos(db, limit = 200) {
+  const cap = Math.min(Math.max(Number(limit) || 200, 1), MAX_LIMIT);
+  return db
+    .prepare(`${ROW} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ${cap}`)
+    .all();
+}
+
 /** 速记转待办时用的默认标题：取第一行，太长就截断 */
 export function memoAsTaskTitle(memo) {
   const first = String(memo?.body || '').split('\n')[0].trim();

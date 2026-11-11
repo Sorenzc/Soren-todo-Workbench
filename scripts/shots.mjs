@@ -25,6 +25,14 @@ const W = Number(argOf('width', '1440'));
 const H = Number(argOf('height', '900'));
 
 /* 页面里的点击动作放在浏览器里执行，所以这些函数只是「字符串」 */
+// 选中一条「等待他人」的任务，用来看详情里的状态切换与行上的「等」标
+function clickWaitingRow() {
+  const rows = [...document.querySelectorAll('.list .row')];
+  const row = rows.find((r) => r.querySelector('.row-wait'));
+  if (!row) throw new Error('当前页没有等待他人的任务');
+  row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
 function clickFirstRow() {
   const row = document.querySelector('.list .row') || document.querySelector('.row');
   if (!row) throw new Error('没有可点击的任务行');
@@ -43,6 +51,13 @@ function clickCardFirstRow() {
 function openPalette() {
   // app.js 的快捷键监听挂在 document 上，派发到 window 收不到
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+}
+// 把列表滚到底，用来拍「等待他人」这种排在最后的分组
+function scrollListBottom() {
+  setTimeout(() => {
+    const list = document.querySelector('#list') || document.querySelector('.list');
+    if (list) list.scrollTop = list.scrollHeight;
+  }, 900);
 }
 function openSettings() {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
@@ -191,6 +206,9 @@ const SCENARIOS = {
   calendar: { url: '/', desc: '月历浮层', steps: [openCalendar] },
   calView: { url: '/?view=calendar', desc: '日历视图（整月格子 + 条目）' },
   memo: { url: '/?view=memo', desc: '速记（随手记的便签）' },
+  trash: { url: '/?view=trash', desc: '回收站（还原或彻底删除）' },
+  waitDetail: { url: '/', desc: '等待他人的任务（状态切换）', steps: [clickWaitingRow] },
+  waitingGroup: { url: '/?view=focus', desc: '聚焦页：等待他人分组', steps: [scrollListBottom], settle: 1600 },
   memoDark: { url: '/?view=memo&theme=dark', desc: '深色下的速记' },
   detail: { url: '/', desc: '打开详情面板', steps: [clickFirstRow] },
   detailEdge: { url: '/?view=today', desc: '选中多行卡片的第一行（圆角描边）', steps: [clickCardFirstRow] },

@@ -83,15 +83,19 @@ export function buildFocus(rows, today, opts = {}) {
   const staleDays = opts.staleDays ?? 14;
   const items = rows.map((r) => decorate(r, today, opts)).sort(byScore);
 
-  const must = items.filter(
+  // 「等待他人」单独一段：不算逾期、不进必做，等对方有动静了再挪回待办
+  const waiting = items.filter((t) => t.status === 'waiting');
+  const active = items.filter((t) => t.status !== 'waiting');
+
+  const must = active.filter(
     (t) =>
       t.bucket === 'overdue' ||
       t.bucket === 'today' ||
       t.bucket === 'soon' ||
       (t.bucket === 'nodate' && t.priority <= 1 && t.age_days >= staleDays)
   );
-  const week = items.filter((t) => t.bucket === 'week').slice(0, 10);
-  const pool = items.filter(
+  const week = active.filter((t) => t.bucket === 'week').slice(0, 10);
+  const pool = active.filter(
     (t) =>
       !must.includes(t) &&
       !week.includes(t) &&
@@ -102,10 +106,12 @@ export function buildFocus(rows, today, opts = {}) {
     today,
     must,
     week,
+    waiting,
     pool_count: pool.length,
-    overdue_count: items.filter((t) => t.bucket === 'overdue').length,
-    today_count: items.filter((t) => t.bucket === 'today').length,
-    soon_count: items.filter((t) => t.bucket === 'soon').length,
-    open_count: items.length,
+    overdue_count: active.filter((t) => t.bucket === 'overdue').length,
+    today_count: active.filter((t) => t.bucket === 'today').length,
+    soon_count: active.filter((t) => t.bucket === 'soon').length,
+    waiting_count: waiting.length,
+    open_count: active.length,
   };
 }

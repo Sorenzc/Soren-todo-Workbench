@@ -134,8 +134,62 @@ export function openDb(cfg) {
       'memo notes'
     );
   }
+
+  // v8：任务状态多一个 waiting（等回执 / 等审批），要重建表放宽 CHECK
+  if (current < 8) {
+    rebuildTaskForWaitingStatus(db, cfg);
+    db.exec('PRAGMA user_version = 8');
+    db.prepare('INSERT OR IGNORE INTO schema_migration (version, applied_at, note) VALUES (?,?,?)').run(
+      8,
+      nowIso(),
+      'waiting tasks'
+    );
+  }
   seed(db);
   return db;
+}
+
+/** 按当前 DDL 复制一份 task 表、只把 status 的 CHECK 换成带 waiting 的版本 */
+function rebuildTaskForWaitingStatus(db, cfg) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='task'").get();
+  if (!row || !row.sql || row.sql.includes("'waiting'")) return;
+  const safe = cfg.dbPath + '.pre-v8.bak';
+  if (!fs.existsSync(safe)) fs.copyFileSync(cfg.dbPath, safe);
+
+  const ddl = row.sql
+    .replace(/^CREATE TABLE\s+(IF NOT EXISTS\s+)?["'`]?task["'`]?/i, 'CREATE TABLE task_new')
+    .replace(
+      /CHECK\s*\(\s*status\s+IN\s*\(([^)]*)\)\s*\)/i,
+      "CHECK (status IN ('open','doing','waiting','done','dropped','scheduled'))"
+    );
+  if (!ddl.includes("'waiting'")) {
+    throw new Error('v8 迁移失败：没能把 status 的 CHECK 换成带 waiting 的版本');
+  }
+
+  const cols = db.prepare('PRAGMA table_info(task)').all().map((c) => c.name).join(', ');
+  const indexes = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='task' AND sql IS NOT NULL")
+    .all()
+    .map((r) => r.sql);
+  const viewSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='view' AND name='v_task_open'").get();
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(ddl);
+    db.exec(`INSERT INTO task_new (${cols}) SELECT ${cols} FROM task`);
+    if (viewSql) db.exec('DROP VIEW v_task_open');
+    db.exec('DROP TABLE task');
+    db.exec('ALTER TABLE task_new RENAME TO task');
+    for (const sql of indexes) db.exec(sql);
+    if (viewSql) db.exec(viewSql.sql);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 const TASK_COLUMNS = [

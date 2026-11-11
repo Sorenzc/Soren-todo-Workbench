@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS task (
   pinned          INTEGER NOT NULL DEFAULT 0,    -- 置顶：排序永远在最前，范围档也压不住
   deleted_at      TEXT,
   CHECK (length(title) BETWEEN 1 AND 200),
-  CHECK (status IN ('open','doing','done','dropped','scheduled')),
+  CHECK (status IN ('open','doing','waiting','done','dropped','scheduled')),
   CHECK (priority BETWEEN 0 AND 3),
   CHECK ((status = 'done') = (completed_at IS NOT NULL)),
   CHECK (due_on IS NULL OR date(due_on) = due_on),
@@ -173,7 +173,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_category_sibling
   ON category(ifnull(parent_id, ''), name);
 
 CREATE INDEX IF NOT EXISTS ix_task_open_due ON task(due_on)
-  WHERE deleted_at IS NULL AND status IN ('open','doing');
+  WHERE deleted_at IS NULL AND status IN ('open','doing','waiting');
 
 CREATE INDEX IF NOT EXISTS ix_task_done_at ON task(completed_at DESC)
   WHERE status = 'done';
@@ -197,4 +197,4 @@ SELECT
   (SELECT l.id FROM task_link l WHERE l.task_id = t.id AND l.is_primary = 1) AS primary_link_id
 FROM task t
 LEFT JOIN category c ON c.id = t.category_id
-WHERE t.deleted_at IS NULL AND t.status IN ('open','doing');
+WHERE t.deleted_at IS NULL AND t.status IN ('open','doing','waiting');

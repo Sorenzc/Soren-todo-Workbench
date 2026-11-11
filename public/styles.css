@@ -560,8 +560,10 @@ kbd {
 .fw-bar.has { background: color-mix(in srgb, var(--accent) 62%, transparent); }
 .fw-bar.done { background: var(--success); }
 .fw-quiet { height: 92px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; color: var(--text-3); }
-.fw-num { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -.02em; }
+.fw-num { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -.02em; overflow: hidden; max-width: 100%; }
 .fw-col.today .fw-num { color: var(--accent); font-weight: 600; }
+/* 紧凑模式下列很窄（尤其打开右侧详情时），「星期一」三个字放不下就会互相压住，缩一档 */
+.fw.fw-compact .fw-num { font-size: 10px; letter-spacing: -.04em; }
 .fw-cap { margin-top: 9px; font-size: 12px; color: var(--text-3); }
 
 /* 空状态：给三条路，而不是一句「没有」 */
@@ -1430,3 +1432,61 @@ details[open] > summary::before { transform: rotate(90deg); }
 .ps-m { font-size: 12px; color: #555; margin-top: 2px; }
 .ps-empty { padding: 24px 0; color: #666; }
 .ps-foot { margin-top: 16px; font-size: 12px; color: #666; border-top: 1px solid #ccc; padding-top: 8px; }
+
+/* --------------------------- 等待他人 / 进行中（v1.10） --------------------------- */
+/* 行上的小标：等 = 等待他人，▶ = 进行中 */
+.row-wait,
+.row-doing {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 5px;
+  margin-left: 6px;
+  flex: none;
+}
+.row-wait { background: var(--warn-50); color: var(--warn-600); }
+.row-doing { background: var(--accent-50); color: var(--accent); }
+[data-theme="dark"] .row-wait { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+[data-theme="dark"] .row-doing { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+/* 详情里的状态切换：待办 / 进行中 / 等待他人 */
+.status-seg { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.status-seg .seg-label { font-size: 12px; color: var(--text-3); margin-right: 2px; }
+.status-seg .btn.on { border-color: var(--accent); color: var(--accent); background: var(--accent-50); }
+[data-theme="dark"] .status-seg .btn.on { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* 聚焦页「等待他人」段的标题配色：不是告警，用低调的橙 */
+.group-head.wait { color: var(--warn-600); }
+[data-theme="dark"] .group-head.wait { color: var(--warn); }
+
+/* --------------------------- 回收站（v1.10） --------------------------- */
+.trash-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.trash-head .bulk-sp { flex: 1; }
+.trash-row .rt { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.trash-row .rt-text { text-decoration: line-through; color: var(--text-2); }
+.trash-meta { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.trash-row .tick.ghost { opacity: .35; }
+.trash-empty { padding: 18px 2px; }
+/* 回收站里的行把操作按钮常显，不然只有悬停才出现 */
+.trash-row .row-actions { opacity: 1; }
+
+/* --------------------------- 标签管理（v1.10） --------------------------- */
+.tag-mgr { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+.tag-mgr-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--border-subtle); }
+.tag-mgr-row:last-child { border-bottom: none; }
+.tag-mgr-row .tag-chip { font-size: 12px; }
+.tag-mgr-row .muted { font-size: 12px; }
+
+/* 等待他人的到期文字：不催自己，用低调的橙 */
+.row-due.waiting {
+  color: var(--warn-600);
+  font-variant-numeric: tabular-nums;
+}
+[data-theme="dark"] .row-due.waiting { color: var(--warn); }

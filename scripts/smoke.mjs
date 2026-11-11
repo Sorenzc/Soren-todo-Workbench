@@ -718,7 +718,14 @@ async function main() {
     title: '冒烟：每月不可跳', recurrence: { rule: 'monthly', day_of_month: 15, horizon_months: 1 },
   });
   createdSeries.push(monthSeries.data.series.id);
-  ok('每月例行跳过被拒 400', (await api('POST', `/api/series/${monthSeries.data.series.id}/skip`, {})).status === 400);
+  // 每月例行现在也能跳过：这一期标 dropped，下一期照常
+  const monthBefore = await api('GET', `/api/series/${monthSeries.data.series.id}`);
+  const monthOpen = (monthBefore.data.tasks || []).find((t) => t.status === 'open');
+  const monthSkip = await api('POST', `/api/series/${monthSeries.data.series.id}/skip`, {});
+  ok('每月例行可以跳过本期', monthSkip.status === 200 && monthSkip.data?.skipped, JSON.stringify(monthSkip.data).slice(0, 80));
+  const monthAfter = await api('GET', `/api/series/${monthSeries.data.series.id}`);
+  const monthSkipped = (monthAfter.data.tasks || []).find((t) => t.id === monthOpen?.id);
+  ok('跳过的那一期变成 dropped', monthSkipped?.status === 'dropped', `status=${monthSkipped?.status}`);
 
   // ---- 检查更新 ----
   // 这一组只验证「本机逻辑」：接口形状、缓存字段、错误处理、非法资产的拒绝。
@@ -765,6 +772,66 @@ async function main() {
   ok('批量完成后是 done 且有归档', doneOne.data.task.status === 'done' && !!doneOne.data.task.archived_path);
   const doneEmpty = await api('POST', '/api/tasks/bulk-complete', { ids: [] });
   ok('批量完成空 ids 被拒', doneEmpty.status === 400);
+
+  // ---- 等待他人 / 回收站 / 摘要 / 批量删除与改提醒 / 标签管理（v1.10） ----
+  const t10 = `冒烟10${Date.now().toString().slice(-6)}`;
+  const waitPast = '2020-01-05';
+  const waitOne = await api('POST', '/api/tasks', { title: `冒烟：等他 ${t10}`, status: 'waiting', dueOn: waitPast });
+  createdTasks.push(waitOne.data.task.id);
+  ok('创建时可直接标 waiting', waitOne.status === 201 && waitOne.data.task.status === 'waiting');
+
+  const waitList = await api('GET', '/api/tasks?status=waiting&limit=50');
+  ok('status=waiting 只返回等待他人', waitList.data.tasks.every((t) => t.status === 'waiting') && waitList.data.tasks.some((t) => t.id === waitOne.data.task.id));
+
+  const openOverdue = await api('GET', '/api/tasks?status=open&due=overdue&limit=50');
+  ok('逾期列表不含等待他人', !openOverdue.data.tasks.some((t) => t.id === waitOne.data.task.id));
+
+  const badStatus = await api('PATCH', `/api/tasks/${waitOne.data.task.id}`, { patch: { status: 'nonsense' } });
+  ok('非法状态被拒 400', badStatus.status === 400);
+  const toDoing = await api('PATCH', `/api/tasks/${waitOne.data.task.id}`, { patch: { status: 'doing' } });
+  ok('可切回进行中', toDoing.status === 200 && toDoing.data.task.status === 'doing' && !!toDoing.data.task.started_at);
+
+  const digest = await api('GET', '/api/digest');
+  ok('今日摘要接口可用', digest.status === 200 && !!digest.data.date && typeof digest.data.waiting === 'number' && Array.isArray(digest.data.top));
+
+  // 回收站：软删 → 出现 → 还原
+  const trashA = await api('POST', '/api/tasks', { title: `冒烟：进回收站 ${t10}` });
+  createdTasks.push(trashA.data.task.id);
+  await api('DELETE', `/api/tasks/${trashA.data.task.id}`);
+  const trashList = await api('GET', '/api/trash');
+  ok('回收站列出软删的待办', trashList.status === 200 && trashList.data.tasks.some((t) => t.id === trashA.data.task.id));
+  const restored = await api('POST', `/api/tasks/${trashA.data.task.id}/restore`);
+  ok('回收站能还原', restored.status === 200);
+
+  // 批量删除 / 批量改提醒
+  const bulkD1 = await api('POST', '/api/tasks', { title: `冒烟：批删甲 ${t10}` });
+  const bulkD2 = await api('POST', '/api/tasks', { title: `冒烟：批删乙 ${t10}` });
+  createdTasks.push(bulkD1.data.task.id, bulkD2.data.task.id);
+  const bulkDel = await api('POST', '/api/tasks/bulk-delete', { ids: [bulkD1.data.task.id, bulkD2.data.task.id] });
+  ok('批量删除两条', bulkDel.status === 200 && bulkDel.data.deleted === 2, JSON.stringify(bulkDel.data));
+  const trashMore = await api('GET', '/api/trash');
+  ok('批量删除的都进了回收站', [bulkD1.data.task.id, bulkD2.data.task.id].every((id) => trashMore.data.tasks.some((t) => t.id === id)));
+
+  const bulkRemindAt = `${bulkToday}T09:30`;
+  const bulkRemind = await api('POST', '/api/tasks/bulk-remind', { ids: [trashA.data.task.id], remindAt: bulkRemindAt });
+  ok('批量设提醒', bulkRemind.status === 200 && bulkRemind.data.remind_at === bulkRemindAt, JSON.stringify(bulkRemind.data));
+  const clearRemind = await api('POST', '/api/tasks/bulk-remind', { ids: [trashA.data.task.id], remindAt: '' });
+  ok('批量清提醒', clearRemind.status === 200 && clearRemind.data.remind_at === null);
+  const badBulkRemind = await api('POST', '/api/tasks/bulk-remind', { ids: [trashA.data.task.id], remindAt: '不是时间' });
+  ok('批量提醒非法时间被拒 400', badBulkRemind.status === 400);
+
+  // 标签：改名 → 合并 → 删除
+  const tagTask = await api('POST', '/api/tasks', { title: `冒烟：标签 ${t10}`, tags: [`冒烟甲${t10}`, `冒烟乙${t10}`] });
+  createdTasks.push(tagTask.data.task.id);
+  const renameRes = await api('PATCH', `/api/tags/${encodeURIComponent(`冒烟甲${t10}`)}`, { name: `冒烟合并${t10}` });
+  ok('标签改名', renameRes.status === 200, JSON.stringify(renameRes.data).slice(0, 80));
+  const mergeRes = await api('PATCH', `/api/tags/${encodeURIComponent(`冒烟乙${t10}`)}`, { name: `冒烟合并${t10}` });
+  ok('改到已存在的名字等于合并', mergeRes.status === 200 && mergeRes.data.merged === true, JSON.stringify(mergeRes.data).slice(0, 80));
+  const bootTags = await api('GET', '/api/bootstrap');
+  const tagNames = bootTags.data.tags.map((x) => x.name);
+  ok('合并后只剩一个标签', tagNames.filter((n) => n === `冒烟合并${t10}`).length === 1 && !tagNames.includes(`冒烟乙${t10}`));
+  const delTag = await api('DELETE', `/api/tags/${encodeURIComponent(`冒烟合并${t10}`)}`);
+  ok('删除标签', delTag.status === 200);
 
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);

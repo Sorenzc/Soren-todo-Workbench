@@ -325,8 +325,8 @@ try {
   check('侧栏分类计数已渲染', documentElement.querySelectorAll('.cat-item').length >= 8, String(documentElement.querySelectorAll('.cat-item').length));
 
   // 选中第一条 → 详情（行标题后面会跟 📌/⏰/↻ 和子项进度这类小标，比较标题时先去掉）
-  const firstTitle = (allRows[0].querySelector('.row-title').textContent || '')
-    .replace(/[📌⏰↻]/g, '').replace(/\s*\d+\/\d+\s*$/, '').trim();
+  // 行标题里的小标（📌 / ⏰ / ↻ / 等 / ▶ / n/m）都在 .row-badges 里，直接取 .rt-text 最稳
+  const firstTitle = (allRows[0].querySelector('.rt-text')?.textContent || '').trim();
   allRows[0].dispatchEvent({ type: 'click', bubbles: true });
   await sleep(800);
   const detail = $('.detail');
@@ -568,10 +568,14 @@ try {
   vm.runInContext("setView('focus')", ctx);
   await sleep(600);
 
-  // 侧栏切分类
-  vm.runInContext("state.filter.cat='cat-property'; setView('all')", ctx);
+  // 侧栏切分类：挑一个当前确实有未完成待办的分类，别写死分类 id（演示数据的分类会变）
+  const catWithTasks = vm.runInContext(
+    "(state.bootstrap?.categories || []).find((c) => (c.open_count || 0) > 0)?.id || null",
+    ctx
+  );
+  vm.runInContext(`state.filter.cat=${JSON.stringify(catWithTasks)}; setView('all')`, ctx);
   await sleep(700);
-  check('按分类筛选后仍有行', documentElement.querySelectorAll('.row').length > 0);
+  check('按分类筛选后仍有行', !!catWithTasks && documentElement.querySelectorAll('.row').length > 0, `cat=${catWithTasks}`);
 
   // 端到端：点「添加」开完整表单 → 建一条 → 出现在列表 → 完成 → 已归档；最后清理
   vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('all')", ctx);
@@ -884,6 +888,67 @@ try {
   const sheet = vm.runInContext('buildPrintSheet()', ctx);
   check('打印清单能生成', !!sheet && !!sheet.querySelector('.ps-item'), sheet ? sheet.textContent.slice(0, 60) : 'null');
   check('打印清单有页脚件数', /共 \d+ 件/.test(sheet?.querySelector('.ps-foot')?.textContent || ''), sheet?.querySelector('.ps-foot')?.textContent);
+
+  // ---- v1.10：等待他人 / 回收站 / 标签管理 / 今日摘要 ----
+  const waitTitle = 'UI 等回执 ' + Date.now();
+  const waitTask = await mkApi({ title: waitTitle, status: 'waiting' });
+  vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('all')", ctx);
+  await sleep(700);
+  const waitRow = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(waitTitle));
+  check('等待他人的行带「等」标', waitRow?.querySelector('.row-wait') !== null);
+
+  vm.runInContext("setView('focus')", ctx);
+  await sleep(800);
+  const focusHeads = [...documentElement.querySelectorAll('.group-head')].map((h) => h.textContent || '');
+  check('聚焦页有「等待他人」段', focusHeads.some((t) => t.includes('等待他人')), focusHeads.join(' | ').slice(0, 80));
+
+  // 详情里的状态切换
+  vm.runInContext("setView('all')", ctx);
+  await sleep(600);
+  const waitRow2 = [...documentElement.querySelectorAll('.row')].find((r) =>
+    (r.querySelector('.row-title')?.textContent || '').includes(waitTitle));
+  waitRow2?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(800);
+  const segBtns = [...documentElement.querySelectorAll('#detail .status-seg .btn')].map((b) => b.textContent || '');
+  check('详情有状态切换按钮', segBtns.some((t) => t.includes('等待他人')), segBtns.join('/'));
+
+  // 回收站：软删 → 回收站里出现 → 还原
+  const trashTitle = 'UI 回收站 ' + Date.now();
+  const trashTask = await mkApi({ title: trashTitle });
+  await fetch(BASE + `/api/tasks/${trashTask.task.id}`, {
+    method: 'DELETE', headers: { 'x-wb-token': token, 'content-type': 'application/json' },
+  });
+  vm.runInContext("state.filter={q:'',cat:null,tag:null,sort:'score'}; setView('trash')", ctx);
+  await sleep(900);
+  const trashRows = [...documentElement.querySelectorAll('.trash-row')].map((r) => r.textContent || '');
+  check('回收站列出刚删的待办', trashRows.some((t) => t.includes(trashTitle)), trashRows.join(' | ').slice(0, 80));
+  const restoreBtn = [...documentElement.querySelectorAll('.trash-row .btn')].find((b) => (b.textContent || '').includes('还原'));
+  restoreBtn?.dispatchEvent({ type: 'click', bubbles: true });
+  await sleep(1000);
+  check('回收站能还原', !(documentElement.querySelector('#list')?.textContent || '').includes(trashTitle));
+
+  // 标签管理入口
+  check('标签区有管理按钮', documentElement.querySelector('#tagManage') !== null);
+  if ((documentElement.querySelector('#tagManage')?.hidden === false)) {
+    documentElement.querySelector('#tagManage').dispatchEvent({ type: 'click', bubbles: true });
+    await sleep(400);
+    check('标签管理弹窗打开', (documentElement.querySelector('#modalRoot')?.textContent || '').includes('标签管理'));
+    documentElement.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await sleep(300);
+  }
+
+  // 今日摘要：手动触发一次，应该出 toast
+  vm.runInContext("localStorage.removeItem('wb-digest-day')", ctx);
+  await vm.runInContext('showDailyDigestOnce()', ctx);
+  await sleep(700);
+  check('今日摘要会出提示', (documentElement.querySelector('#toasts')?.textContent || '').includes('今日摘要'));
+
+  // 清理这一段造的待办
+  for (const id of [waitTask?.task?.id, trashTask?.task?.id]) {
+    if (!id) continue;
+    await fetch(BASE + `/api/tasks/${id}/purge`, { method: 'POST', headers: { 'x-wb-token': token, 'content-type': 'application/json' }, body: '{}' });
+  }
 
   // 清理：本段建的每日系列
   if (dailySeriesId14) await fetch(BASE + `/api/series/${dailySeriesId14}`, { method: 'DELETE', headers: { 'x-wb-token': token } });

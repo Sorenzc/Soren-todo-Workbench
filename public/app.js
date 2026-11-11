@@ -124,6 +124,7 @@ const state = {
   // 速记（独立一库）：列表与搜索词
   memos: [],
   memoQ: '',
+  trash: { tasks: [], memos: [], loaded: false },
   // 归档搜索词（只在内存里，不落盘）
   arcQ: '',
   // 多选：Shift/Ctrl 点行进这里，底部操作条据此显示
@@ -205,7 +206,38 @@ function paletteCommands() {
     { kind: '命令', text: '立即备份数据库', run: () => { closePalette(); doBackup(); } },
     { kind: '命令', text: '切换深浅色', run: () => { closePalette(); toggleTheme(); } },
     { kind: '命令', text: '重新生成全部归档文件', run: () => { closePalette(); rerenderArchive(); } },
+    { kind: '命令', text: '标签管理（改名 / 合并 / 删除）', run: () => { closePalette(); openTagManager(); } },
+    { kind: '命令', text: '回收站（还原或彻底删除）', run: () => { closePalette(); setView('trash'); } },
+    // 针对当前选中的待办，省得先点开详情再点按钮
+    { kind: '动作', text: '完成当前选中的待办', run: () => { const t = selectedTask(); closePalette(); if (t) completeTask(t); } },
+    { kind: '动作', text: '把当前选中的待办推到明天', run: () => { const t = selectedTask(); closePalette(); if (t) pushOneTo(t, addDays(todayStr(), 1)); } },
+    { kind: '动作', text: '置顶 / 取消置顶当前选中', run: () => { const t = selectedTask(); closePalette(); if (t) togglePin(t); } },
+    { kind: '动作', text: '当前选中的待办标为等待他人', run: () => { const t = selectedTask(); closePalette(); if (t) setTaskStatus(t, 'waiting'); } },
   ];
+}
+
+/** 当前选中的待办（列表里找得到的那一份） */
+function selectedTask() {
+  if (!state.selectedId) { toast('先选中一条待办'); return null; }
+  return state.tasks.find((x) => x.id === state.selectedId)
+    || state.done.find((x) => x.id === state.selectedId)
+    || null;
+}
+
+async function setTaskStatus(t, status) {
+  try {
+    await api.patch(`/api/tasks/${t.id}`, { patch: { status } });
+    await refresh();
+    toast(status === 'waiting' ? '已标为等待他人（不算逾期）' : '状态已更新');
+  } catch (err) { showErr(err); }
+}
+
+async function pushOneTo(t, date) {
+  try {
+    await api.patch(`/api/tasks/${t.id}`, { patch: { dueOn: date } });
+    await refresh();
+    toast(`已挪到 ${date}`);
+  } catch (err) { showErr(err); }
 }
 
 function renderPalette(query) {
@@ -347,6 +379,12 @@ async function loadMemos() {
   const q = state.memoQ ? `?q=${encodeURIComponent(state.memoQ)}&limit=200` : '?limit=200';
   const r = await api.get('/api/memos' + q);
   state.memos = r.memos || [];
+}
+
+/* 回收站：软删掉的待办与速记，可以还原或彻底删掉 */
+async function loadTrash() {
+  const r = await api.get('/api/trash?limit=200');
+  state.trash = { tasks: r.tasks || [], memos: r.memos || [], loaded: true };
 }
 
 /** 速记的时间口径：刚记的用「刚刚 / N 分钟前」，跨天用日期，跨年带年 */
@@ -546,6 +584,7 @@ async function refresh() {
     else if (state.view === 'stats') { await loadTasks(); await loadStats(); }
     else if (state.view === 'calendar') await loadCalendarView();
     else if (state.view === 'memo') await loadMemos();
+    else if (state.view === 'trash') await loadTrash();
     // 聚焦页小组件要一份「本月每天几件」的计数，只在用得上的时候取
     if (state.view === 'focus') await loadFocusWidgets();
     if (state.cal.open) await loadCalendarMonth(state.cal.ym);
@@ -573,6 +612,7 @@ const VIEWS = [
   { id: 'calendar', label: '日历', icon: '⊞' },
   // 速记也追加在最后：它是独立一库（便签/备忘录），不参与待办计数
   { id: 'memo', label: '速记', icon: '✎' },
+  { id: 'trash', label: '回收站', icon: '⌫' },
 ];
 
 function renderNav() {
@@ -672,6 +712,56 @@ function renderTags() {
       },
     }, `#${t.name}`, el('span', { class: 't-n', text: String(t.task_count ?? '') })));
   }
+  // 标签管理：改名（同名即合并）、删除；入口放在标签区标题右侧
+  $('#tagManage').hidden = !tags.length;
+}
+
+/* 标签管理弹窗：改名会顺带合并同名标签，删除只影响标签本身，不会动待办 */
+function openTagManager() {
+  const tags = state.bootstrap?.tags || [];
+  return openModal((box, done) => {
+    box.append(el('h3', { text: '标签管理' }));
+    box.append(el('p', { class: 'muted', text: '改名时如果新名字已经存在，会合并成一个标签；删除标签不会删掉待办。' }));
+    const wrap = el('div', { class: 'tag-mgr' });
+    for (const t of tags) {
+      wrap.append(el('div', { class: 'tag-mgr-row' },
+        el('span', { class: 'tag-chip', text: `#${t.name}` }),
+        el('span', { class: 'muted', text: `${t.task_count ?? 0} 条` }),
+        el('span', { class: 'bulk-sp' }),
+        el('button', {
+          class: 'btn small', text: '改名',
+          onclick: async () => {
+            const next = window.prompt(`把 #${t.name} 改成：`, t.name);
+            if (next === null) return;
+            const to = next.trim().replace(/^#/, '');
+            if (!to || to === t.name) return;
+            try {
+              await api.patch(`/api/tags/${encodeURIComponent(t.name)}`, { name: to });
+              await loadBootstrap();
+              await refresh();
+              done();
+              openTagManager();
+              toast(`已把 #${t.name} 改成 #${to}`);
+            } catch (err) { showErr(err); }
+          },
+        }),
+        el('button', {
+          class: 'btn small ghost danger', text: '删除',
+          onclick: async () => {
+            if (!window.confirm(`删掉标签 #${t.name}？${t.task_count ? `它挂在 ${t.task_count} 条待办上，删掉只是去掉这个标签。` : ''}`)) return;
+            try {
+              await api.del(`/api/tags/${encodeURIComponent(t.name)}`);
+              await loadBootstrap();
+              await refresh();
+              done();
+              openTagManager();
+              toast(`已删除标签 #${t.name}`);
+            } catch (err) { showErr(err); }
+          },
+        })));
+    }
+    box.append(wrap);
+  });
 }
 
 /* ------------------------------ 主列表 ------------------------------ */
@@ -679,17 +769,20 @@ function renderTags() {
 // 其余（标签、评分、原因、关联）挪到详情面板，避免一行 8 个元素抢注意力。
 function taskRow(t, opts = {}) {
   const isDone = t.status === 'done';
+  const isWaiting = t.status === 'waiting';
   const dl = t.due_on ? daysLeft(t.due_on) : null;
-  const urgency = isDone || dl === null ? '' : dl < 0 ? 'overdue' : dl === 0 ? 'today' : '';
+  // 等待他人不算逾期：既有红条也不该出现「逾期 N 天」这种催自己的字
+  const urgency = isDone || isWaiting || dl === null ? '' : dl < 0 ? 'overdue' : dl === 0 ? 'today' : '';
   const folder = t.primary_link_state === 'missing'
     ? el('span', { class: 'row-folder missing', title: '关联的文件夹找不到了', text: '⚠' })
     : t.link_count ? el('span', { class: 'row-folder', title: '已关联文件夹', text: '📁' }) : null;
   const dueText = isDone
     ? (t.completed_at ? (isDoneDay() ? t.completed_at.slice(11, 16) : t.completed_at.slice(5, 10)) : '')
-    : dl === null ? ''
-      : dl < 0 ? `逾期 ${-dl} 天`
-        : dl === 0 ? '今天'
-          : `${parseDate(t.due_on).getMonth() + 1}-${parseDate(t.due_on).getDate()}`;
+    : isWaiting ? '等对方'
+      : dl === null ? ''
+        : dl < 0 ? `逾期 ${-dl} 天`
+          : dl === 0 ? '今天'
+            : `${parseDate(t.due_on).getMonth() + 1}-${parseDate(t.due_on).getDate()}`;
   const tips = [t.title, t.category_name && `分类：${t.category_name}`, t.due_on && `到期：${t.due_on}`,
     t.tag_names && `标签：${t.tag_names}`, t.why, t.archived_path && `归档：${t.archived_path}`].filter(Boolean).join('\n');
   return el('article', {
@@ -713,6 +806,8 @@ function taskRow(t, opts = {}) {
     el('span', { class: 'row-title' },
       el('span', { class: 'rt-text', text: t.title }),
       el('span', { class: 'row-badges' },
+        t.status === 'waiting' ? el('span', { class: 'row-wait', title: '等待他人（不计逾期）', text: '等' }) : null,
+        t.status === 'doing' ? el('span', { class: 'row-doing', title: '进行中', text: '▶' }) : null,
         t.series_id ? el('span', { class: 'row-recur', title: '例行待办', text: '↻' }) : null,
         t.child_count
           ? el('span', {
@@ -730,7 +825,7 @@ function taskRow(t, opts = {}) {
           el('span', { class: 'd' }), t.category_name)
       : el('span'),
     el('span', { class: `row-prio p${t.priority}`, text: t.priority <= 1 ? PRIO_SHORT[t.priority] : '' }),
-    el('span', { class: `row-due ${isDone ? 'done-time' : urgency}`, text: dueText }),
+    el('span', { class: `row-due ${isDone ? 'done-time' : isWaiting ? 'waiting' : urgency}`, text: dueText }),
     folder || el('span'),
     el('div', { class: 'row-actions' },
       el('button', {
@@ -908,7 +1003,12 @@ function fwWeek() {
               title: `${mdLabel(c.date)} · ${c.open} 条待办，完成 ${c.done}`,
             })
           : null),
-      el('span', { class: 'fw-num', text: WEEK_LABELS[i] })
+      // 紧凑模式列很窄（尤其右边开着详情），「星期一」会把左右两列顶到一起，缩成「周一」
+      el('span', {
+        class: 'fw-num',
+        text: widgetsCompact() ? WEEK_LABELS[i].replace('星期', '周') : WEEK_LABELS[i],
+        title: WEEK_LABELS[i],
+      })
     );
   });
   const empty = !doneTotal && !openTotal;
@@ -956,7 +1056,9 @@ function renderFocus() {
   const pinnedIds = new Set(pinned.map((t) => t.id));
   const mustIds = new Set(must.map((t) => t.id));
   const weekIds = new Set(week.map((t) => t.id));
-  const pool = items.filter((t) => !pinnedIds.has(t.id) && !mustIds.has(t.id) && !weekIds.has(t.id));
+  // 「等待他人」在等对方，别混进待办池里跟着排到期
+  const waitingIds = new Set((f.waiting || []).map((t) => t.id));
+  const pool = items.filter((t) => !pinnedIds.has(t.id) && !mustIds.has(t.id) && !weekIds.has(t.id) && !waitingIds.has(t.id));
 
   // 置顶永远在最前：范围档、排序都压不住它，这是置顶的全部意义
   if (pinned.length) {
@@ -984,6 +1086,12 @@ function renderFocus() {
     if (pool.length > poolShow.length) {
       list.append(el('div', { class: 'list-foot', text: `还有 ${pool.length - poolShow.length} 条在池子里，用搜索或「全部待办」查看` }));
     }
+  }
+  // 等待他人单独一段：在等对方，不算逾期，也不参与上面的排序
+  const waiting = f.waiting || [];
+  if (waiting.length) {
+    list.append(groupHead('等待他人', waiting.length, 'wait', '不算逾期 · 等对方有动静再挪回来'));
+    list.append(rowCard(waiting));
   }
 }
 
@@ -1262,6 +1370,8 @@ function renderBulkBar() {
     el('button', { class: 'btn small', text: '改到本周日', onclick: () => bulkDo('sunday', items) }),
     el('button', { class: 'btn small', text: '打标签', onclick: () => bulkDo('tag', items) }),
     el('button', { class: 'btn small', text: '移分类', onclick: () => bulkDo('category', items) }),
+    el('button', { class: 'btn small', text: '改提醒', onclick: () => bulkDo('remind', items) }),
+    el('button', { class: 'btn small ghost danger', text: '删除', onclick: () => bulkDo('delete', items) }),
     el('span', { class: 'bulk-sp' }),
     el('button', { class: 'btn small ghost', text: '取消选择', onclick: clearPicked })
   );
@@ -1313,6 +1423,24 @@ async function bulkDo(kind, items) {
       clearPicked();
       await refresh();
       toast(`已把 ${r.updated} 条移到「${cat.name}」`);
+      return;
+    }
+    if (kind === 'delete') {
+      if (!window.confirm(`把选中的 ${ids.length} 条移到回收站？\n\n移进去还能还原，不会立刻丢。`)) return;
+      const r = await api.post('/api/tasks/bulk-delete', { ids });
+      clearPicked();
+      await refresh();
+      toast(`已移到回收站（${r.deleted || ids.length} 条）`);
+      return;
+    }
+    if (kind === 'remind') {
+      const raw = window.prompt('给选中的待办设提醒时间（例如 2026-11-12T09:00，留空表示清掉提醒）：', '');
+      if (raw === null) return;
+      const at = raw.trim();
+      const r = await api.post('/api/tasks/bulk-remind', { ids, remindAt: at || null });
+      clearPicked();
+      await refresh();
+      toast(at ? `已给 ${r.updated} 条设上提醒 ${at.replace('T', ' ')}` : `已清掉 ${r.updated} 条的提醒`);
     }
   } catch (err) {
     showErr(err);
@@ -1627,11 +1755,11 @@ function renderViewHead() {
   tools.innerHTML = '';
   $('#empty').hidden = true;
   // 唯一的「添加」入口：归档/统计/例行/某天已完成这些不该新建的视图，隐藏它
-  const canAdd = !['archive', 'stats', 'series', 'calendar', 'memo'].includes(state.view) && !isDoneDay();
+  const canAdd = !['archive', 'stats', 'series', 'calendar', 'memo', 'trash'].includes(state.view) && !isDoneDay();
   $('#qaAdd').hidden = !canAdd;
-  // 速记条是「便签」入口，跟着视图而不是跟着「添加」：除归档/统计外都留着
+  // 速记条是「便签」入口，跟着视图而不是跟着「添加」：除归档/统计/回收站外都留着
   const captureBar = $('#captureForm');
-  if (captureBar) captureBar.hidden = ['archive', 'stats'].includes(state.view);
+  if (captureBar) captureBar.hidden = ['archive', 'stats', 'trash'].includes(state.view);
   const f = state.focus;
   if (state.view === 'focus') {
     const load = todayLoad();
@@ -1726,6 +1854,13 @@ function renderViewHead() {
       class: 'tool-btn', text: '＋ 新建例行', title: '新建一个按月 / 按天 / 按周的例行待办',
       onclick: () => openNewTaskModal({ recurring: true }),
     }));
+  } else if (state.view === 'trash') {
+    const tasks = state.trash?.tasks?.length || 0;
+    const memos = state.trash?.memos?.length || 0;
+    t.textContent = '回收站';
+    sub.textContent = tasks + memos
+      ? `删掉的待办 ${tasks} 条 · 速记 ${memos} 条；这里的东西还能还原`
+      : '删掉的待办和速记会先放这里，可以还原或彻底删掉';
   } else if (state.view === 'memo') {
     const n = (state.memos || []).length;
     t.textContent = '速记';
@@ -2075,7 +2210,25 @@ function renderDetail() {
       el('label', { class: 'field' }, el('span', { text: '预估耗时' }), estInput),
       el('label', { class: 'field' }, el('span', { text: '实际耗时' }), actInput)
     ),
-    el('div', { class: 'd-row' }, pinBtn)
+    el('div', { class: 'd-row' },
+      pinBtn,
+      el('span', { class: 'status-seg', role: 'group', 'aria-label': '状态' },
+        ...[['open', '待办'], ['doing', '进行中'], ['waiting', '等待他人']].map(([k, label]) =>
+          el('button', {
+            class: `btn small${(t.status || 'open') === k ? ' on' : ' ghost'}`,
+            title: k === 'waiting' ? '在等对方，不算逾期' : `标记为${label}`,
+            text: label,
+            onclick: async () => {
+              try {
+                await api.patch(`/api/tasks/${t.id}`, { patch: { status: k } });
+                await selectTask(t.id);
+                await refresh();
+              } catch (err) { showErr(err); }
+            },
+          })
+        )
+      )
+    )
   ));
 
   // 子待办：只允许一层，只在父任务详情里维护；子项不单独归档，跟着父任务的 md checklist 走
@@ -3369,6 +3522,31 @@ function openSettings() {
   });
 }
 
+/* 每天第一次打开时给一条今日摘要；不想看就点掉，第二天再出现 */
+async function showDailyDigestOnce() {
+  try {
+    if (localStorage.getItem('wb-digest-day') === todayStr()) return;
+    const d = await api.get('/api/digest');
+    if (!d || (!d.open && !d.overdue)) {
+      localStorage.setItem('wb-digest-day', todayStr());
+      return;
+    }
+    const bits = [];
+    if (d.due_today) bits.push(`今天 ${d.due_today} 件`);
+    if (d.overdue) bits.push(`逾期 ${d.overdue} 件`);
+    if (d.waiting) bits.push(`等他人 ${d.waiting} 件`);
+    if (d.minutes) bits.push(`预计 ${minuteText(d.minutes)}`);
+    toast(`今日摘要：${bits.join(' · ') || `未完成 ${d.open} 件`}`, {
+      ms: 7000,
+      actionLabel: '看今天',
+      onAction: () => setView('today'),
+    });
+    localStorage.setItem('wb-digest-day', todayStr());
+  } catch {
+    /* 摘要失败不打扰用户 */
+  }
+}
+
 /* 每天第一次打开时静默查一次更新；有新版本只在顶栏齿轮上点一颗小圆点 */
 async function checkUpdateSilently() {
   try {
@@ -3702,6 +3880,114 @@ function renderMemo() {
   list.append(card);
 }
 
+/* 回收站：删掉的东西先放这里，能还原也能彻底删掉 */
+function renderTrash() {
+  const list = $('#list');
+  list.innerHTML = '';
+  const tasks = state.trash?.tasks || [];
+  const memos = state.trash?.memos || [];
+
+  if (!tasks.length && !memos.length) {
+    const box = el('div', { class: 'memo-empty' });
+    box.append(
+      el('strong', { text: '回收站是空的' }),
+      el('div', { text: '删掉的待办和速记会先放这里，7 天内都能还原；想立刻腾空间也可以在这里彻底删掉。' }),
+    );
+    list.append(box);
+    return;
+  }
+
+  const head = el('div', { class: 'trash-head' },
+    el('span', { class: 'muted', text: `待办 ${tasks.length} 条 · 速记 ${memos.length} 条` }));
+  if (tasks.length) {
+    head.append(el('button', {
+      class: 'btn small ghost', text: '清空待办回收站',
+      onclick: async () => {
+        if (!window.confirm(`彻底删掉这 ${tasks.length} 条待办？删了就找不回来了。`)) return;
+        try {
+          for (const t of tasks) await api.post(`/api/tasks/${t.id}/purge`);
+          await refresh();
+          toast(`已彻底删掉 ${tasks.length} 条待办`);
+        } catch (err) { showErr(err); }
+      },
+    }));
+  }
+  list.append(head);
+
+  if (tasks.length) {
+    const card = el('div', { class: 'card' });
+    for (const t of tasks) {
+      card.append(el('div', { class: 'row trash-row' },
+        el('span', { class: 'bar' }),
+        el('span', { class: 'tick ghost' }),
+        el('div', { class: 'rt' },
+          el('span', { class: 'rt-text', text: t.title }),
+          el('span', { class: 'trash-meta', text: `${t.category_name || '未分类'} · 删除于 ${memoTime(t.deleted_at)}` })),
+        el('div', { class: 'meta' }),
+        el('div', { class: 'row-actions' },
+          el('button', {
+            class: 'btn small ghost', text: '还原',
+            onclick: async () => {
+              try {
+                await api.post(`/api/tasks/${t.id}/restore`);
+                await refresh();
+                toast(`已还原：${t.title}`);
+              } catch (err) { showErr(err); }
+            },
+          }),
+          el('button', {
+            class: 'btn small ghost danger', text: '彻底删',
+            onclick: async () => {
+              if (!window.confirm(`彻底删掉「${t.title}」？删了就找不回来了。`)) return;
+              try {
+                await api.post(`/api/tasks/${t.id}/purge`);
+                await refresh();
+                toast('已彻底删除');
+              } catch (err) { showErr(err); }
+            },
+          })))) ;
+    }
+    list.append(card);
+  }
+
+  if (memos.length) {
+    const card = el('div', { class: 'card' });
+    for (const m of memos) {
+      const first = String(m.body || '').split('\n')[0];
+      card.append(el('div', { class: 'row trash-row' },
+        el('span', { class: 'bar' }),
+        el('span', { class: 'tick ghost' }),
+        el('div', { class: 'rt' },
+          el('span', { class: 'rt-text', text: first.length > 40 ? first.slice(0, 40) + '…' : first }),
+          el('span', { class: 'trash-meta', text: `速记 · 删除于 ${memoTime(m.deleted_at)}` })),
+        el('div', { class: 'meta' }),
+        el('div', { class: 'row-actions' },
+          el('button', {
+            class: 'btn small ghost', text: '还原',
+            onclick: async () => {
+              try {
+                await api.post(`/api/memos/${m.id}/restore`);
+                await refresh();
+                toast('速记已还原');
+              } catch (err) { showErr(err); }
+            },
+          }),
+          el('button', {
+            class: 'btn small ghost danger', text: '彻底删',
+            onclick: async () => {
+              if (!window.confirm('彻底删掉这条速记？删了就找不回来了。')) return;
+              try {
+                await api.post(`/api/memos/${m.id}/purge`);
+                await refresh();
+                toast('已彻底删除');
+              } catch (err) { showErr(err); }
+            },
+          }))));
+    }
+    list.append(card);
+  }
+}
+
 function renderSeries() {
   const list = $('#list');
   list.innerHTML = '';
@@ -3736,10 +4022,12 @@ function renderSeries() {
         off
           ? el('button', { class: 'tool-btn', text: '恢复', onclick: () => seriesAction(s, 'resume') })
           : el('button', { class: 'tool-btn', text: '取消未来', title: '今天之后的期作废，已完成的保留', onclick: () => seriesAction(s, 'cancel') }),
-        !off && s.rule !== 'monthly'
+        !off
           ? el('button', {
               class: 'tool-btn', text: '跳过这一期',
-              title: '这一期不做了，系列继续往后滚（不会留下已完成记录）',
+              title: s.rule === 'monthly'
+                ? '这一期不做了，系列里这一期标为已跳过，后面的期次不受影响'
+                : '这一期不做了，系列继续往后滚（不会留下已完成记录）',
               onclick: () => seriesAction(s, 'skip'),
             })
           : null,
@@ -3819,6 +4107,7 @@ function renderAll() {
   else if (state.view === 'stats') renderStats();
   else if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'memo') renderMemo();
+  else if (state.view === 'trash') renderTrash();
   renderStatusBar();
   renderBulkBar();
   document.body.querySelector('.body').classList.toggle('no-detail', !state.selectedId);
@@ -3851,6 +4140,7 @@ function bindEvents() {
   $('#btnAddSeries').addEventListener('click', () => openNewTaskModal({ recurring: true }));
   $('#searchTrigger').addEventListener('click', openPalette);
   $('#btnAddCat').addEventListener('click', () => openCategoryModal());
+  $('#tagManage').addEventListener('click', () => openTagManager());
   $('#btnTheme').addEventListener('click', toggleTheme);
   $('#btnSettings').addEventListener('click', openSettings);
   $('#btnContact').addEventListener('click', openContactModal);
@@ -4007,6 +4297,8 @@ function bindEvents() {
     setInterval(pollReminders, 20000);
     // 每天第一次打开时后台查一次更新：失败静默，只在顶栏齿轮上点一个小圆点
     checkUpdateSilently();
+    // 每天第一次打开时给一条今日摘要（今天几件、预计多久、有没有逾期）
+    showDailyDigestOnce();
     // 聚焦页的时钟每秒走一格（不在这个视图时代价只有一次判断）
     setInterval(tickFocusClock, 1000);
   } catch (err) {

@@ -51,7 +51,7 @@ export function listCategories(db) {
   return db
     .prepare(
       `SELECT c.*,
-         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status IN ('open','doing') AND t.deleted_at IS NULL AND t.parent_id IS NULL) AS open_count,
+         (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status IN ('open','doing','waiting') AND t.deleted_at IS NULL AND t.parent_id IS NULL) AS open_count,
          (SELECT count(*) FROM task t WHERE t.category_id = c.id AND t.status = 'done' AND t.deleted_at IS NULL AND t.parent_id IS NULL) AS done_count
        FROM category c
        ORDER BY c.sort_order, c.name`
@@ -157,8 +157,10 @@ export function listTasks(db, opts = {}) {
     where.push("t.status <> 'dropped'");
   } else if (status === 'dropped') {
     where.push("t.status = 'dropped'");
+  } else if (status === 'waiting') {
+    where.push("t.status = 'waiting'");
   } else {
-    where.push("t.status IN ('open','doing')");
+    where.push("t.status IN ('open','doing','waiting')");
   }
 
   // 子待办只在父任务详情里出现：默认列表排除，否则子条会混进「全部待办」，
@@ -190,7 +192,8 @@ export function listTasks(db, opts = {}) {
 
   const today = localDate();
   if (due === 'overdue') {
-    where.push('t.due_on IS NOT NULL AND t.due_on < ?');
+    // 「等待他人」不算逾期：这类任务在等对方，逾期提醒只会变成噪音
+    where.push("t.due_on IS NOT NULL AND t.due_on < ? AND t.status <> 'waiting'");
     params.push(today);
   } else if (due === 'today') {
     where.push('t.due_on = ?');
@@ -233,7 +236,7 @@ export function calendarCounts(db, from, to) {
     .prepare(
       `SELECT t.due_on AS d, count(*) AS n
          FROM task t
-        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing','waiting') AND t.parent_id IS NULL
           AND t.due_on IS NOT NULL AND t.due_on >= ? AND t.due_on <= ?
         GROUP BY t.due_on`
     )
@@ -244,13 +247,14 @@ export function calendarCounts(db, from, to) {
   const overdue = db
     .prepare(
       `SELECT count(*) AS n FROM task t
-        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing','waiting') AND t.parent_id IS NULL
+          AND t.status <> 'waiting'
           AND t.due_on IS NOT NULL AND t.due_on < ?`
     )
     .get(from).n;
   const openTotal = db
     .prepare(
-      `SELECT count(*) AS n FROM task t WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL`
+      `SELECT count(*) AS n FROM task t WHERE t.deleted_at IS NULL AND t.status IN ('open','doing','waiting') AND t.parent_id IS NULL`
     )
     .get().n;
 
@@ -282,7 +286,7 @@ export function calendarItems(db, from, to) {
               (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL) AS child_count,
               (SELECT count(*) FROM task ch WHERE ch.parent_id = t.id AND ch.deleted_at IS NULL AND ch.status = 'done') AS child_done
          FROM task t LEFT JOIN category c ON c.id = t.category_id
-        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing') AND t.parent_id IS NULL
+        WHERE t.deleted_at IS NULL AND t.status IN ('open','doing','waiting') AND t.parent_id IS NULL
           AND t.due_on IS NOT NULL AND t.due_on >= ? AND t.due_on <= ?
         ORDER BY t.due_on ASC, t.due_time IS NULL, t.due_time ASC, t.priority ASC, t.created_at ASC`
     )
@@ -359,15 +363,18 @@ export function createTask(db, raw = {}) {
 
   const id = uid();
   const now = nowIso();
+  // 允许直接建「进行中 / 等待他人」，默认待办
+  const startStatus = ['open', 'doing', 'waiting'].includes(String(input.status)) ? String(input.status) : 'open';
   db.prepare(
     `INSERT INTO task (id, title, notes_md, category_id, status, priority, due_on, due_time,
        estimate_min, created_at, updated_at, last_touched_at, rev, sort_order, parent_id, remind_at)
-     VALUES (?,?,?,?,'open',?,?,?,?,?,?,?,1,0,?,?)`
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,0,?,?)`
   ).run(
     id,
     title,
     normalized.notesMd,
     categoryId,
+    startStatus,
     priority,
     normDate(input.dueOn),
     normalized.dueTime,
@@ -431,6 +438,15 @@ export function patchTask(db, id, rawPatch = {}, rev) {
   if (patch.doneNote !== undefined) push('done_note', clampStr(String(patch.doneNote ?? ''), 2000));
   if (patch.sortOrder !== undefined) push('sort_order', Number(patch.sortOrder) || 0);
   if (patch.pinned !== undefined) push('pinned', patch.pinned ? 1 : 0);
+  if (patch.status !== undefined) {
+    // 只允许在三个「未完成」状态之间切换；完成/弃做/排期走各自的动作，避免绕过归档与级联
+    const next = String(patch.status);
+    if (!['open', 'doing', 'waiting'].includes(next)) {
+      throw bad('只能切换成待办、进行中或等待他人', 'BAD_STATUS');
+    }
+    push('status', next);
+    if (next === 'doing' && !row.started_at) push('started_at', nowIso());
+  }
   if (patch.remindAt !== undefined) {
     const next = normRemind(patch.remindAt);
     push('remind_at', next);
@@ -467,7 +483,7 @@ export function completeTask(db, id) {
   if (!row.parent_id) {
     const kids = db
       .prepare(
-        "SELECT id FROM task WHERE parent_id = ? AND deleted_at IS NULL AND status IN ('open','doing')"
+        "SELECT id FROM task WHERE parent_id = ? AND deleted_at IS NULL AND status IN ('open','doing','waiting')"
       )
       .all(id);
     for (const kid of kids) {
@@ -484,7 +500,9 @@ export function reopenTask(db, id) {
   const row = db.prepare('SELECT * FROM task WHERE id = ? AND deleted_at IS NULL').get(id);
   if (!row) throw notFound('任务不存在');
   // 例行系列被「取消未来」标成 dropped 的期，也能单独恢复成待办
-  if (row.status === 'open' || row.status === 'doing') return { task: getTask(db, id), previousArchive: null };
+  if (row.status === 'open' || row.status === 'doing' || row.status === 'waiting') {
+    return { task: getTask(db, id), previousArchive: null };
+  }
   const now = nowIso();
   // 每日/每周的历史行恢复后就是一条普通待办：留着 series_id 会变成该系列的第二条活行，
   // 和正在滚的那条抢「下一期」。撤销完成也不回滚滚动进度，所以直接断开关系。
@@ -528,7 +546,7 @@ export function claimDueReminders(db, opts = {}) {
       `SELECT t.id, t.title, t.priority, t.due_on, t.due_time, t.remind_at, c.name AS category_name
          FROM task t LEFT JOIN category c ON c.id = t.category_id
         WHERE t.deleted_at IS NULL AND t.remind_at IS NOT NULL AND t.remind_fired = 0
-          AND t.remind_at <= ? AND t.status IN ('open','doing')
+          AND t.remind_at <= ? AND t.status IN ('open','doing','waiting')
         ORDER BY t.remind_at ASC
         LIMIT 50`
     )
@@ -768,16 +786,16 @@ export function stats(db) {
   const today = localDate();
   // 统计口径一律只看一级任务：子待办跟着父任务完成，算进来会让「今天完成 N 件」虚高
   const openCount = db
-    .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL")
+    .prepare("SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND deleted_at IS NULL AND parent_id IS NULL")
     .get();
   const overdue = db
     .prepare(
-      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
+      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND status <> 'waiting' AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
     )
     .get(today);
   const dueToday = db
     .prepare(
-      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
+      "SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
     )
     .get(today);
   const doneTotal = db
@@ -809,7 +827,7 @@ export function stats(db) {
     .prepare(
       `SELECT coalesce(c.name,'未分类') AS name, coalesce(c.color,'') AS color, count(*) AS n
        FROM task t LEFT JOIN category c ON c.id = t.category_id
-       WHERE t.status IN ('open','doing') AND t.deleted_at IS NULL AND t.parent_id IS NULL
+       WHERE t.status IN ('open','doing','waiting') AND t.deleted_at IS NULL AND t.parent_id IS NULL
        GROUP BY c.id ORDER BY n DESC LIMIT 8`
     )
     .all();
@@ -817,7 +835,7 @@ export function stats(db) {
   const byPriority = db
     .prepare(
       `SELECT priority, count(*) AS n FROM task
-       WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL GROUP BY priority ORDER BY priority`
+       WHERE status IN ('open','doing','waiting') AND deleted_at IS NULL AND parent_id IS NULL GROUP BY priority ORDER BY priority`
     )
     .all();
 
@@ -920,4 +938,98 @@ export function bulkPatch(db, ids, patch = {}) {
     }
   }
   return { updated, failed, total: seen.size };
+}
+
+/* --------------------------- 批量删除 / 批量改提醒 --------------------------- */
+
+export function bulkDelete(db, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) throw bad('没有要删除的待办', 'BAD_IDS');
+  if (ids.length > 200) throw bad('一次最多删 200 条', 'BAD_IDS');
+  let deleted = 0;
+  const failed = [];
+  const seen = new Set();
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      softDelete(db, id);
+      deleted += 1;
+    } catch (err) {
+      failed.push({ id, reason: String((err && err.message) || err) });
+    }
+  }
+  return { deleted, failed, total: seen.size };
+}
+
+export function bulkRemind(db, ids, remindAt) {
+  if (!Array.isArray(ids) || ids.length === 0) throw bad('没有要改提醒的待办', 'BAD_IDS');
+  if (ids.length > 200) throw bad('一次最多改 200 条', 'BAD_IDS');
+  const next = normRemind(remindAt);
+  let updated = 0;
+  const failed = [];
+  const seen = new Set();
+  const now = nowIso();
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      const row = getTask(db, id);
+      if (row.status === 'done' || row.status === 'dropped') {
+        failed.push({ id, reason: row.status });
+        continue;
+      }
+      db.prepare(
+        'UPDATE task SET remind_at = ?, remind_fired = 0, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?'
+      ).run(next, now, now, id);
+      logEvent(db, id, 'updated', { fields: ['remindAt'], bulk: true });
+      updated += 1;
+    } catch (err) {
+      failed.push({ id, reason: String((err && err.message) || err) });
+    }
+  }
+  return { remind_at: next, updated, failed, total: seen.size };
+}
+
+/* ------------------------------- 回收站 ------------------------------- */
+
+export function listDeletedTasks(db, limit = 200) {
+  const cap = Math.min(Math.max(Number(limit) || 200, 1), 500);
+  return db
+    .prepare(`${ROW_SELECT} WHERE t.deleted_at IS NOT NULL ORDER BY t.deleted_at DESC LIMIT ?`)
+    .all(cap);
+}
+
+/* ------------------------------- 标签管理 ------------------------------- */
+
+export function renameTag(db, from, to) {
+  const src = String(from || '').trim().replace(/^#/, '');
+  const dst = String(to || '').trim().replace(/^#/, '').slice(0, 20);
+  if (!src || !dst) throw bad('标签名不能为空', 'BAD_TAG');
+  const tag = db.prepare('SELECT * FROM tag WHERE name = ?').get(src);
+  if (!tag) throw notFound('标签不存在');
+  if (src === dst) return { from: src, to: dst, merged: false, moved: 0 };
+  const target = db.prepare('SELECT * FROM tag WHERE name = ?').get(dst);
+  const moved = db.prepare('SELECT count(*) AS n FROM task_tag WHERE tag_id = ?').get(tag.id).n;
+  if (target) {
+    // 目标已存在：把引用并过去，再删掉旧标签（合并）
+    db.prepare('INSERT OR IGNORE INTO task_tag (task_id, tag_id) SELECT task_id, ? FROM task_tag WHERE tag_id = ?').run(
+      target.id,
+      tag.id
+    );
+    db.prepare('DELETE FROM task_tag WHERE tag_id = ?').run(tag.id);
+    db.prepare('DELETE FROM tag WHERE id = ?').run(tag.id);
+    return { from: src, to: dst, merged: true, moved: Number(moved || 0) };
+  }
+  db.prepare('UPDATE tag SET name = ? WHERE id = ?').run(dst, tag.id);
+  return { from: src, to: dst, merged: false, moved: Number(moved || 0) };
+}
+
+export function deleteTag(db, name) {
+  const clean = String(name || '').trim().replace(/^#/, '');
+  const tag = db.prepare('SELECT * FROM tag WHERE name = ?').get(clean);
+  if (!tag) throw notFound('标签不存在');
+  const n = db.prepare('SELECT count(*) AS n FROM task_tag WHERE tag_id = ?').get(tag.id).n;
+  db.prepare('DELETE FROM task_tag WHERE tag_id = ?').run(tag.id);
+  db.prepare('DELETE FROM tag WHERE id = ?').run(tag.id);
+  return { name: clean, detached: Number(n || 0) };
 }

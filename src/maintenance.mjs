@@ -204,7 +204,7 @@ export function inspect(db, cfg) {
       missing: missing.map((m) => ({ id: m.id, title: m.title, rel: m.rel })),
     },
     tasks: {
-      open: count("SELECT count(*) FROM task WHERE deleted_at IS NULL AND status IN ('open','doing')"),
+      open: count("SELECT count(*) FROM task WHERE deleted_at IS NULL AND status IN ('open','doing','waiting')"),
       done: count("SELECT count(*) FROM task WHERE deleted_at IS NULL AND status = 'done'"),
       dropped: count("SELECT count(*) FROM task WHERE deleted_at IS NULL AND status = 'dropped'"),
       scheduled: count("SELECT count(*) FROM task WHERE deleted_at IS NULL AND status = 'scheduled'"),

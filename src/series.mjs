@@ -331,7 +331,7 @@ export function virtualOccurrences(db, from, to) {
          FROM task_series s
          JOIN task t ON t.id = (
            SELECT id FROM task
-            WHERE series_id = s.id AND deleted_at IS NULL AND status IN ('open','doing')
+            WHERE series_id = s.id AND deleted_at IS NULL AND status IN ('open','doing','waiting')
             ORDER BY due_on LIMIT 1
          )
          LEFT JOIN category c ON c.id = s.category_id
@@ -450,10 +450,10 @@ export function listSeries(db) {
     .prepare(
       `SELECT s.*,
          (SELECT count(*) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL) AS total_count,
-         (SELECT count(*) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status IN ('open','doing')) AS open_count,
+         (SELECT count(*) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status IN ('open','doing','waiting')) AS open_count,
          (SELECT count(*) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status = 'scheduled') AS scheduled_count,
          (SELECT count(*) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status = 'done') AS done_count,
-         (SELECT min(t.due_on) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status IN ('open','doing')) AS next_on
+         (SELECT min(t.due_on) FROM task t WHERE t.series_id = s.id AND t.deleted_at IS NULL AND t.status IN ('open','doing','waiting')) AS next_on
        FROM task_series s
        ORDER BY s.status ASC, s.created_at DESC`
     )
@@ -551,7 +551,7 @@ export function promoteSeriesOccurrences(db, today = localDate()) {
   const shelved = db
     .prepare(
       `UPDATE task SET status = 'scheduled', updated_at = ?
-        WHERE series_id IS NOT NULL AND status IN ('open','doing')
+        WHERE series_id IS NOT NULL AND status IN ('open','doing','waiting')
           AND deleted_at IS NULL AND occur_month > ? ${monthlyOnly}`
     )
     .run(now, promoteUntil).changes;
@@ -601,15 +601,38 @@ export function conflictIfStale(series, rev) {
 // 不留下一条"已完成"的假记录（真实跳过 ≠ 完成）。
 export function skipOccurrence(db, id, today = localDate()) {
   const series = getSeriesRow(db, id);
-  if (series.rule === 'monthly') {
-    throw bad('每月例行请直接改这一期的日期，或取消整个系列', 'BAD_RULE');
-  }
   const live = db
     .prepare(
-      `SELECT * FROM task WHERE series_id = ? AND deleted_at IS NULL AND status IN ('open','doing') ORDER BY due_on ASC LIMIT 1`
+      `SELECT * FROM task WHERE series_id = ? AND deleted_at IS NULL AND status IN ('open','doing','waiting') ORDER BY due_on ASC LIMIT 1`
     )
     .get(id);
   if (!live) throw notFound('这个例行暂时没有可跳过的这一期');
+
+  if (series.rule === 'monthly') {
+    // 每月例行是「铺跑道」：跳过这一期就是把这期标成弃做，跑道里下个月那期照常在
+    const now = nowIso();
+    db.prepare(
+      `UPDATE task SET status = 'dropped', dropped_at = ?, updated_at = ?, last_touched_at = ?, rev = rev + 1 WHERE id = ?`
+    ).run(now, now, now, live.id);
+    const nextRow = db
+      .prepare(
+        `SELECT due_on FROM task WHERE series_id = ? AND deleted_at IS NULL AND status IN ('open','doing') AND due_on > ? ORDER BY due_on ASC LIMIT 1`
+      )
+      .get(id, live.due_on || today);
+    const next = nextRow ? nextRow.due_on : null;
+    db.prepare('UPDATE task_series SET next_on = ?, updated_at = ?, rev = rev + 1 WHERE id = ?').run(
+      next,
+      now,
+      id
+    );
+    logEvent(db, live.id, 'updated', { skip: live.due_on, next, rule: 'monthly' });
+    return {
+      skipped: live.due_on,
+      next,
+      task: db.prepare('SELECT * FROM task WHERE id = ?').get(live.id),
+    };
+  }
+
   const from = live.due_on || today;
   const next = nextRollingDate(from, series.rule, series.interval_n, today);
   db.prepare(

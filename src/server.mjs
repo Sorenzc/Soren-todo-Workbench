@@ -223,7 +223,7 @@ function bootstrap() {
   const counts = {
     open: db
       .prepare(
-        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL"
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND deleted_at IS NULL AND parent_id IS NULL"
       )
       .get()?.n,
     done: db
@@ -231,12 +231,12 @@ function bootstrap() {
       .get()?.n,
     overdue: db
       .prepare(
-        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND status <> 'waiting' AND deleted_at IS NULL AND parent_id IS NULL AND due_on IS NOT NULL AND due_on < ?"
       )
       .get(localDate())?.n,
     today: db
       .prepare(
-        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
+        "SELECT count(*) AS n FROM task WHERE status IN ('open','doing','waiting') AND deleted_at IS NULL AND parent_id IS NULL AND due_on = ?"
       )
       .get(localDate())?.n,
     memos: M.countMemos(db),
@@ -421,6 +421,20 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, out);
   }
 
+  // 批量删除（软删，进回收站）
+  if (method === 'POST' && pathname === '/api/tasks/bulk-delete') {
+    const body = await readBody(req);
+    const out = tx(db, () => T.bulkDelete(db, body.ids));
+    return sendJson(res, 200, out);
+  }
+
+  // 批量改提醒时间
+  if (method === 'POST' && pathname === '/api/tasks/bulk-remind') {
+    const body = await readBody(req);
+    const out = tx(db, () => T.bulkRemind(db, body.ids, body.remindAt ?? body.remind_at));
+    return sendJson(res, 200, out);
+  }
+
   // 批量完成：逐条走 completeFlow，失败的跳过、继续下一条（单条失败不中断）
   if (method === 'POST' && pathname === '/api/tasks/bulk-complete') {
     const body = await readBody(req);
@@ -507,7 +521,70 @@ async function handleApi(req, res, url) {
 
   if (method === 'GET' && pathname === '/api/categories') return sendJson(res, 200, { categories: T.listCategories(db) });
   if (method === 'GET' && pathname === '/api/tags') return sendJson(res, 200, { tags: T.listTags(db) });
+  // 标签改名（目标已存在就合并）/ 删除
+  if (seg[0] === 'api' && seg[1] === 'tags' && seg[2] && !seg[3]) {
+    const name = decodeURIComponent(seg[2]);
+    if (method === 'PATCH' || method === 'PUT') {
+      const body = await readBody(req);
+      const out = tx(db, () => T.renameTag(db, name, body.name ?? body.to));
+      return sendJson(res, 200, out);
+    }
+    if (method === 'DELETE') {
+      const out = tx(db, () => T.deleteTag(db, name));
+      return sendJson(res, 200, out);
+    }
+  }
   if (method === 'GET' && pathname === '/api/stats') return sendJson(res, 200, T.stats(db));
+
+  // 回收站：软删掉的待办与速记，可以还原或彻底删掉
+  if (method === 'GET' && pathname === '/api/trash') {
+    return sendJson(res, 200, {
+      tasks: T.listDeletedTasks(db, url.searchParams.get('limit') || 200),
+      memos: M.listDeletedMemos(db, url.searchParams.get('limit') || 200),
+    });
+  }
+
+  // 今日摘要：聚焦页和你每天第一眼看到的那些数字
+  if (method === 'GET' && pathname === '/api/digest') {
+    const today = localDate();
+    const counts = db
+      .prepare(
+        `SELECT
+           (SELECT count(*) FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+              AND status IN ('open','doing','waiting')) AS open,
+           (SELECT count(*) FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+              AND status IN ('open','doing') AND due_on IS NOT NULL AND due_on < ?) AS overdue,
+           (SELECT count(*) FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+              AND status IN ('open','doing') AND due_on = ?) AS today,
+           (SELECT count(*) FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+              AND status = 'waiting') AS waiting,
+           (SELECT count(*) FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+              AND status IN ('open','doing') AND due_on IS NOT NULL AND due_on <= ?) AS due_soon`
+      )
+      .get(today, today, today);
+    const load = db
+      .prepare(
+        `SELECT coalesce(sum(estimate_min), 0) AS minutes,
+                sum(CASE WHEN estimate_min IS NULL THEN 1 ELSE 0 END) AS missing
+           FROM task WHERE deleted_at IS NULL AND parent_id IS NULL
+             AND status IN ('open','doing') AND due_on IS NOT NULL AND due_on <= ?`
+      )
+      .get(today);
+    const top = T.listTasks(db, { status: 'open', due: 'today', limit: 20 })
+      .slice(0, 5)
+      .map((t) => ({ id: t.id, title: t.title, priority: t.priority, due_time: t.due_time }));
+    return sendJson(res, 200, {
+      date: today,
+      open: Number(counts.open || 0),
+      overdue: Number(counts.overdue || 0),
+      due_today: Number(counts.today || 0),
+      waiting: Number(counts.waiting || 0),
+      due_soon: Number(counts.due_soon || 0),
+      minutes: Number(load.minutes || 0),
+      missing_estimate: Number(load.missing || 0),
+      top,
+    });
+  }
 
   // 速记：和待办完全独立的一套接口
   if (method === 'GET' && pathname === '/api/memos') {

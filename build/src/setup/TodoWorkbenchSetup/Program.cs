@@ -46,7 +46,11 @@ namespace TodoWorkbenchSetup
 							shot.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, shot.Width, shot.Height));
 							bmp.Save(ini.ShotPath, System.Drawing.Imaging.ImageFormat.Png);
 						}
+						string verify = shot.VerifyLayout();
+						Console.WriteLine(verify);
+						SetupLog.W("verify:\r\n" + verify);
 						shot.Close();
+						Environment.Exit(verify.Contains("VERIFY OK") ? 0 : 3);
 					}
 					Environment.Exit(0);
 				}

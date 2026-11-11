@@ -23,9 +23,15 @@ namespace TodoWorkbenchSetup
 
 		private readonly TextBox dirBox;
 
-		private readonly TextBox dataBox;
-
 		private readonly Label hint;
+
+		private readonly Panel footer;
+
+		private readonly Button btnCancel;
+
+		private readonly Button btnInstall;
+
+		private readonly Button btnDone;
 
 		private readonly Label scopeTip;
 
@@ -64,9 +70,9 @@ namespace TodoWorkbenchSetup
 			BackColor = Color.White;
 			Font = new Font("Microsoft YaHei UI", 9.75f);
 			page1 = new Panel();
-			page1.Dock = DockStyle.Fill;
 			page1.BackColor = Color.White;
 			page1.AutoScroll = true;
+			page1.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
 			base.Controls.Add(page1);
 
 			// 文字块一律 AutoSize + MaximumSize，按实际换行高度往下摆；
@@ -118,49 +124,29 @@ namespace TodoWorkbenchSetup
 
 			page1.Controls.Add(Place(Paragraph("默认位置不在 C 盘也不影响使用；也可以装到任何有写权限的文件夹。", 20, 620), ref y1, 8));
 
-			page1.Controls.Add(Place(Label2("数据存到", 20, true), ref y1, 10));
-			dataBox = new TextBox();
-			dataBox.Bounds = new Rectangle(20, y1 + 6, 520, 26);
-			dataBox.Text = ini.DataDir ?? Paths.DataDir;
-			page1.Controls.Add(dataBox);
-			Button dataBrowse = new Button();
-			dataBrowse.Text = "浏览…";
-			dataBrowse.Bounds = new Rectangle(548, dataBox.Top, 92, 26);
-			dataBrowse.FlatStyle = FlatStyle.Flat;
-			dataBrowse.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
-			dataBrowse.Click += delegate
-			{
-				BrowseInto(dataBox, "选择数据存放文件夹");
-			};
-			page1.Controls.Add(dataBrowse);
-			y1 = dataBox.Bottom;
-
-			page1.Controls.Add(Place(Paragraph("待办、速记、归档和备份都放这里；卸载时可选保留，装好后也能在「设置」里改。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y1, 8));
+			// 数据目录不再让安装时选（用户 2026-11-11 明确要求去掉），只说明默认位置与改法
+			page1.Controls.Add(Place(Paragraph("数据默认存在 " + Paths.DataDir + "，装好后可在「设置 → 数据位置」看到；想换地方，改安装目录下 config.json 里的 dataDir 即可（或卸载时保留数据、重装时用 --data 指定）。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y1, 8));
 
 			hint = Paragraph("", 20, 620);
 			hint.ForeColor = Color.FromArgb(185, 28, 28);
 			Reserve(hint, 2);
 			page1.Controls.Add(Place(hint, ref y1, 8));
 
-			Button button2 = Button2("取消", 470, 448);
-			button2.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-			button2.Click += delegate
+			btnCancel = Button2("取消", 470, 14);
+			btnCancel.Click += delegate
 			{
 				Close();
 			};
-			page1.Controls.Add(button2);
-			Button button3 = Button2("安装", 558, 448);
-			button3.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-			button3.BackColor = Color.FromArgb(37, 99, 235);
-			button3.ForeColor = Color.White;
-			button3.FlatAppearance.BorderSize = 0;
-			button3.Click += delegate
+			btnInstall = Button2("安装", 558, 14);
+			btnInstall.BackColor = Color.FromArgb(37, 99, 235);
+			btnInstall.ForeColor = Color.White;
+			btnInstall.FlatAppearance.BorderSize = 0;
+			btnInstall.Click += delegate
 			{
 				StartInstall();
 			};
-			page1.Controls.Add(button3);
+
 			page2 = new Panel();
-			page2.Dock = DockStyle.Fill;
 			page2.BackColor = Color.White;
 			page2.Visible = false;
 			base.Controls.Add(page2);
@@ -182,7 +168,6 @@ namespace TodoWorkbenchSetup
 			page2.Controls.Add(Place(Paragraph("会做的：新建程序文件夹、在开始菜单放一个「待办工作台」、在「设置 → 应用」里登记以便卸载。\r\n不会做的：不改系统设置、不装驱动、不联网上传数据（程序只监听本机 127.0.0.1）。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y2, 12));
 
 			page3 = new Panel();
-			page3.Dock = DockStyle.Fill;
 			page3.BackColor = Color.White;
 			page3.Visible = false;
 			base.Controls.Add(page3);
@@ -201,17 +186,56 @@ namespace TodoWorkbenchSetup
 			selfCheck = Paragraph("", 20, 620);
 			Reserve(selfCheck, 3);
 			page3.Controls.Add(Place(selfCheck, ref y3, 10));
-			Button button4 = Button2("完成", 558, 448);
-			button4.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-			button4.BackColor = Color.FromArgb(37, 99, 235);
-			button4.ForeColor = Color.White;
-			button4.FlatAppearance.BorderSize = 0;
-			button4.Click += delegate
+
+			btnDone = Button2("完成", 558, 14);
+			btnDone.BackColor = Color.FromArgb(37, 99, 235);
+			btnDone.ForeColor = Color.White;
+			btnDone.FlatAppearance.BorderSize = 0;
+			btnDone.Click += delegate
 			{
 				Finish();
 			};
-			page3.Controls.Add(button4);
+
+			// 三页共用一条固定底栏：按钮永远在栏里，不随内容滚动，也不会被页面盖住。
+			// （v1.9.3 的教训：按钮原来放在可滚动的 page1 里，加了说明文字后滚出可视区，用户看不到「安装」）
+			int footerH = 56;
+			footer = new Panel();
+			footer.BackColor = Color.White;
+			footer.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+			footer.Bounds = new Rectangle(0, base.ClientSize.Height - footerH, base.ClientSize.Width, footerH);
+			Panel hairline = new Panel();
+			hairline.BackColor = Color.FromArgb(229, 231, 235);
+			hairline.Bounds = new Rectangle(0, 0, footer.Width, 1);
+			hairline.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+			footer.Controls.Add(hairline);
+			btnCancel.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+			btnInstall.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+			btnDone.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+			footer.Controls.Add(btnCancel);
+			footer.Controls.Add(btnInstall);
+			footer.Controls.Add(btnDone);
+			base.Controls.Add(footer);
+
+			int pageH = base.ClientSize.Height - footerH;
+			page1.Bounds = new Rectangle(0, 0, base.ClientSize.Width, pageH);
+			page2.Bounds = new Rectangle(0, 0, base.ClientSize.Width, pageH);
+			page3.Bounds = new Rectangle(0, 0, base.ClientSize.Width, pageH);
+			page2.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+			page3.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+
 			SyncScope();
+			SyncButtons(page1);
+		}
+
+		/// <summary>按当前页显示对应的底栏按钮（2 装安装中不显示按钮）。</summary>
+		private void SyncButtons(Panel page)
+		{
+			bool onPage1 = page == page1;
+			bool onPage3 = page == page3;
+			btnCancel.Visible = onPage1;
+			btnInstall.Visible = onPage1;
+			btnDone.Visible = onPage3;
+			footer.Visible = onPage1 || onPage3;
 		}
 
 		/// <summary>开发用：直接翻到某一页，方便截图核对排版（--preview=1|2|3）。</summary>
@@ -232,6 +256,51 @@ namespace TodoWorkbenchSetup
 				selfCheck.Text = "自检通过：程序文件齐全，可以正常启动。";
 				selfCheck.ForeColor = Color.FromArgb(4, 120, 87);
 			}
+			SyncButtons(page == 3 ? page3 : (page == 1 ? page1 : page2));
+		}
+
+		/// <summary>给 --shot / --verify 用：确认底栏按钮真的在窗口里可见、没被页面盖住。</summary>
+		public string VerifyLayout()
+		{
+			System.Text.StringBuilder sb = new System.Text.StringBuilder();
+			bool ok = true;
+			bool expectPage1 = page1.Visible;
+			bool expectPage3 = page3.Visible;
+			Button[] buttons = new Button[3] { btnCancel, btnInstall, btnDone };
+			foreach (Button b in buttons)
+			{
+				Rectangle screen = b.Parent.RectangleToScreen(b.Bounds);
+				Rectangle formScreen = base.RectangleToScreen(base.ClientRectangle);
+				bool inside = formScreen.Contains(screen);
+				bool visible = b.Visible && b.Parent.Visible;
+				bool shouldShow = expectPage1 ? (b != btnDone) : (expectPage3 && b == btnDone);
+				if (!inside || visible != shouldShow)
+				{
+					ok = false;
+				}
+				sb.AppendLine("btn " + b.Text + " visible=" + visible + " expect=" + shouldShow + " inside=" + inside
+					+ " bounds=" + b.Left + "," + b.Top + " " + b.Width + "x" + b.Height
+					+ " parent=" + b.Parent.Name + "/" + b.Parent.GetType().Name);
+			}
+			int contentBottom = ContentBottom(page1);
+			bool fits = contentBottom <= page1.Height;
+			if (!fits)
+			{
+				ok = false;
+			}
+			sb.AppendLine("page1 scroll=" + page1.AutoScrollPosition.Y + " contentBottom=" + contentBottom + " viewHeight=" + page1.Height + " fits=" + fits);
+			sb.AppendLine(ok ? "VERIFY OK" : "VERIFY FAIL");
+			return sb.ToString();
+		}
+
+		private static int ContentBottom(Panel p)
+		{
+			int bottom = 0;
+			foreach (Control c in p.Controls)
+			{
+				bottom = Math.Max(bottom, c.Bottom);
+			}
+			return bottom;
 		}
 
 		public void LayoutReport()
@@ -524,12 +593,16 @@ namespace TodoWorkbenchSetup
 				hint.Text = text;
 				return;
 			}
-			string dataDir = dataBox.Text.Trim().TrimEnd('\\');
-			string text2 = Validate("数据目录", dataDir, false);
-			if (text2 != null)
+			// 安装界面不再让选数据目录；只有静默安装传了 --data 时才校验它
+			string dataDir = string.IsNullOrEmpty(ini.DataDir) ? Paths.DataDir : ini.DataDir.Trim().TrimEnd('\\');
+			if (!string.IsNullOrEmpty(ini.DataDir))
 			{
-				hint.Text = text2;
-				return;
+				string text2 = Validate("数据目录", dataDir, false);
+				if (text2 != null)
+				{
+					hint.Text = text2;
+					return;
+				}
 			}
 			hint.Text = "";
 			if (dataDir.TrimEnd('\\').ToLowerInvariant() == dir.TrimEnd('\\').ToLowerInvariant())
@@ -586,6 +659,7 @@ namespace TodoWorkbenchSetup
 			page1.Visible = false;
 			page2.Visible = true;
 			page2.BringToFront();
+			SyncButtons(page2);
 			InstallRunner runner = new InstallRunner(new Ini
 			{
 				Dir = dir,
@@ -625,6 +699,7 @@ namespace TodoWorkbenchSetup
 						page2.Visible = false;
 						page1.Visible = true;
 						page1.BringToFront();
+						SyncButtons(page1);
 						hint.Text = "安装没有完成：" + message;
 					}
 					else
@@ -633,6 +708,7 @@ namespace TodoWorkbenchSetup
 						page2.Visible = false;
 						page3.Visible = true;
 						page3.BringToFront();
+						SyncButtons(page3);
 						selfCheck.Text = runner.SelfCheckMessage;
 						selfCheck.ForeColor = (runner.SelfCheckOk ? Color.FromArgb(4, 120, 87) : Color.FromArgb(180, 83, 9));
 					}

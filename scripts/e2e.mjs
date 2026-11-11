@@ -411,6 +411,21 @@ async function main() {
     await sleep(300);
     ok('Esc 关掉搜索面板', await cdp.eval(`document.getElementById('palette').hidden`) === true);
 
+    // 设置里的「版本与更新」
+    await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))`);
+    await sleep(350);
+    await cdp.eval(`(() => {
+      const item = [...document.querySelectorAll('#paletteList .p-item')].find((i) => /设置/.test(i.textContent || ''));
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    })()`);
+    await sleep(400);
+    const settingsText = await cdp.eval(`document.querySelector('.modal')?.textContent || ''`);
+    ok('设置里有「版本与更新」', /版本与更新/.test(settingsText));
+    ok('设置里有「检查更新」按钮', /检查更新/.test(settingsText));
+    ok('设置里显示当前版本号', /当前版本：\d+\.\d+\.\d+/.test(settingsText), settingsText.slice(0, 60));
+    await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(250);
+
     ok('页面全程无未捕获异常', errors.length === 0, errors.map((e) => String(e).split('\n')[0]).join(' | '));
   } finally {
     close();

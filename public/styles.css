@@ -955,6 +955,10 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .modal {
   width: min(440px, calc(100vw - 40px));
+  /* 设置面板会随内容变高（比如检查更新展开更新说明），超出窗口时自己在框内滚动 */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-surface); border-radius: 12px;
   box-shadow: var(--shadow-3); padding: 18px 20px 16px;
   animation: pop-in .18s var(--ease-out);
@@ -969,6 +973,33 @@ details[open] > summary::before { transform: rotate(90deg); }
 }
 .modal .m-field input:focus, .modal .m-field select:focus { outline: none; border-color: var(--accent); }
 .modal .m-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* 版本与更新 */
+.upd-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.upd-title { font-size: 15px; font-weight: 650; color: var(--text-1); margin: 2px 0 2px; }
+.upd-notes {
+  margin: 8px 0 0;
+  max-height: 190px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.upd-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.upd-bar {
+  height: 6px;
+  margin: 8px 0 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-3) 18%, transparent);
+  overflow: hidden;
+}
+.upd-bar > span { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .25s ease; }
 .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
 .swatches button { width: 22px; height: 22px; border-radius: 999px; border: 2px solid transparent; }
 .swatches button.active { border-color: var(--text-1); }

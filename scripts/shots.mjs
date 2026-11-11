@@ -126,6 +126,33 @@ function searchArchive() {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+// 打开设置 → 点「检查更新」，等接口回来（截图前会再等一下）
+function checkUpdate() {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  const item = [...document.querySelectorAll('#paletteList .p-item')].find((i) => /设置/.test(i.textContent || ''));
+  item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  const btn = [...document.querySelectorAll('.modal .btn')].find((b) => /检查更新/.test(b.textContent || ''));
+  if (!btn) throw new Error('设置里没有「检查更新」按钮');
+  btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
+// 等接口回来后再把弹窗滚到底，这样截图里能看到下载按钮
+function scrollModalBottom() {
+  setTimeout(() => {
+    const m = document.querySelector('.modal');
+    if (m) m.scrollTop = m.scrollHeight;
+  }, 1800);
+}
+
+// 点「下载安装包」，用真实下载验证前端的进度轮询
+function clickDownload() {
+  setTimeout(() => {
+    const btn = [...document.querySelectorAll('.modal .btn')].find((b) => /下载安装包/.test(b.textContent || ''));
+    if (!btn) throw new Error('没有找到「下载安装包」按钮');
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }, 1200);
+}
+
 const SCENARIOS = {
   focus: { url: '/', desc: '聚焦（默认首页）' },
   dark: { url: '/?theme=dark', desc: '深色模式' },
@@ -156,6 +183,8 @@ const SCENARIOS = {
   series: { url: '/?view=series', desc: '例行待办列表' },
   archiveSearch: { url: '/?view=archive', desc: '归档全文搜索', steps: [searchArchive] },
   maintenance: { url: '/', desc: '体检与清理', steps: [openMaintenance] },
+  update: { url: '/', desc: '检查更新（发现新版本）', steps: [checkUpdate, scrollModalBottom], settle: 2800 },
+  updateDone: { url: '/', desc: '更新包下载完成（已校验）', steps: [checkUpdate, scrollModalBottom, clickDownload], settle: 14000 },
 };
 
 async function main() {
@@ -190,7 +219,8 @@ async function main() {
         await cdp.eval(`(${step.toString()})()`);
         await sleep(500);
       }
-      await sleep(300);
+      // 有些场景要等接口回来（比如检查更新），sc.settle 指定额外等待毫秒
+      await sleep(sc.settle || 300);
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       const file = path.join(OUT, `${name}.png`);
       fs.writeFileSync(file, Buffer.from(shot.data, 'base64'));

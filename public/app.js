@@ -2977,6 +2977,106 @@ async function openMaintenance() {
   });
 }
 
+// ---- 版本与更新 ----------------------------------------------------------
+// 只走 api.github.com：检查版本、下载安装包、校验 sha256。替换程序留给安装包自己。
+function updRetry(box, label = '重试') {
+  return el('button', { class: 'btn', text: label, style: { marginLeft: '8px' }, onclick: () => runUpdateCheck(box) });
+}
+
+async function runUpdateCheck(box) {
+  box.replaceChildren(el('span', { class: 'hint', text: '正在检查…' }));
+  let info;
+  try {
+    info = await api.get('/api/update?force=1');
+  } catch (err) {
+    box.replaceChildren(
+      el('span', { class: 'hint', text: '检查失败：' + err.message }),
+      updRetry(box)
+    );
+    return;
+  }
+  if (!info.ok) {
+    box.replaceChildren(
+      el('span', { class: 'hint', text: info.error || '检查失败' }),
+      updRetry(box)
+    );
+    return;
+  }
+  if (!info.has_update) {
+    box.replaceChildren(
+      el('span', { class: 'hint', text: `已经是最新版本 v${info.current}` }),
+      updRetry(box, '再检查一次')
+    );
+    return;
+  }
+
+  const dl = el('button', {
+    class: 'btn primary',
+    text: `下载安装包（${info.suggested?.size_mb ?? '?'} MB）`,
+    onclick: () => startUpdateDownload(box, info),
+  });
+  const notes = String(info.notes || '').split('\n').slice(0, 24).join('\n');
+  box.replaceChildren(
+    el('div', { class: 'upd-title', text: `发现新版本 v${info.latest}` }),
+    el('div', { class: 'hint', text: `当前 v${info.current}${info.cached ? ' · 这份信息来自缓存' : ''}` }),
+    el('pre', { class: 'upd-notes', text: notes || '（这个版本没有写说明）' }),
+    el('div', { class: 'upd-actions' }, dl,
+      el('a', { class: 'btn', href: info.page_url, target: '_blank', rel: 'noreferrer', text: '在浏览器里看' }))
+  );
+}
+
+async function startUpdateDownload(box, info) {
+  box.replaceChildren(el('span', { class: 'hint', text: '正在开始下载…' }));
+  try {
+    await api.post('/api/update/download', { asset: info.suggested?.name });
+  } catch (err) {
+    box.replaceChildren(el('span', { class: 'hint', text: '下载失败：' + err.message }), updRetry(box));
+    return;
+  }
+  const bar = el('span');
+  const line = el('div', { class: 'hint', text: '下载中…' });
+  const wrap = el('div', {},
+    el('div', { class: 'upd-bar' }, bar),
+    line
+  );
+  box.replaceChildren(wrap);
+
+  const tick = async () => {
+    let st;
+    try {
+      st = (await api.get('/api/update/download')).download;
+    } catch {
+      setTimeout(tick, 1200);
+      return;
+    }
+    if (st.phase === 'running') {
+      bar.style.width = Math.max(2, st.percent) + '%';
+      line.textContent = `下载中 ${st.percent}% · ${st.received_mb} / ${st.total_mb} MB`;
+      setTimeout(tick, 700);
+      return;
+    }
+    if (st.phase === 'done') {
+      bar.style.width = '100%';
+      const name = String(st.file || '').split(/[\\/]/).pop();
+      const verify = st.digestOk === true ? 'sha256 校验通过' : st.digestOk === false ? 'sha256 不一致' : '未提供校验值';
+      box.replaceChildren(
+        el('div', { class: 'upd-title', text: '安装包已下载' }),
+        el('div', { class: 'hint', text: `${name} · ${st.total_mb} MB · ${verify}` }),
+        el('div', { class: 'hint', text: '关掉工作台（托盘里退出），再运行这个安装包就能升级；数据在独立目录，不会被覆盖。' }),
+        el('div', { class: 'upd-actions' },
+          el('button', { class: 'btn', text: '打开所在文件夹', onclick: () => api.post('/api/update/reveal', {}).catch(showErr) }),
+          updRetry(box, '重新检查'))
+      );
+      return;
+    }
+    box.replaceChildren(
+      el('span', { class: 'hint', text: '下载失败：' + (st.error || '未知错误') }),
+      updRetry(box)
+    );
+  };
+  setTimeout(tick, 600);
+}
+
 function openSettings() {
   openModal((modal, close) => {
     modal.classList.add('wide');
@@ -3011,6 +3111,17 @@ function openSettings() {
         el('div', { class: 'hint', style: { marginTop: '6px' } },
           '归档是普通文件夹，直接复制走就是备份。')
       ),
+      (() => {
+        const updBox = el('div', { class: 'upd-box', id: 'updBox' },
+          el('button', { class: 'btn', text: '检查更新', onclick: () => runUpdateCheck(updBox) }),
+          el('span', { class: 'hint', text: '只连 api.github.com，不走网页直链' })
+        );
+        return el('div', { class: 'm-field' },
+          el('label', { text: '版本与更新' }),
+          el('div', { class: 'hint' }, `当前版本：${state.bootstrap?.version || '未知'}`),
+          updBox
+        );
+      })(),
       el('div', { class: 'm-actions' },
         el('button', { class: 'btn', text: '立即备份', onclick: doBackup }),
         el('button', { class: 'btn', text: '体检与清理', title: '看看库里、归档里有没有对不上的地方', onclick: () => { close(); openMaintenance(); } }),

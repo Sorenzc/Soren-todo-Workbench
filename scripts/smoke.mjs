@@ -720,6 +720,20 @@ async function main() {
   createdSeries.push(monthSeries.data.series.id);
   ok('每月例行跳过被拒 400', (await api('POST', `/api/series/${monthSeries.data.series.id}/skip`, {})).status === 400);
 
+  // ---- 检查更新 ----
+  // 这一组只验证「本机逻辑」：接口形状、缓存字段、错误处理、非法资产的拒绝。
+  // 真正的联网检查与下载不放进冒烟（不想让测试依赖 GitHub 和 34MB 流量）。
+  const upd = await api('GET', '/api/update');
+  ok('检查更新接口可用', upd.status === 200 && /^\d+\.\d+\.\d+$/.test(String(upd.data?.current || '')));
+  ok('检查更新返回形状完整', typeof upd.data?.ok === 'boolean' && 'has_update' in upd.data && Array.isArray(upd.data?.assets));
+  ok('检查更新失败不抛错', upd.data?.ok === true || typeof upd.data?.error === 'string');
+  const dl0 = await api('GET', '/api/update/download');
+  ok('下载状态接口可用', dl0.status === 200 && typeof dl0.data?.download?.phase === 'string');
+  const badAsset = await api('POST', '/api/update/download', { asset: '不存在的安装包.exe' });
+  ok('下载不存在的资产被拒', badAsset.status === 400 || badAsset.status === 404);
+  const revealNoFile = await api('POST', '/api/update/reveal', {});
+  ok('没下载过时打开文件夹被拒', revealNoFile.status === 400 || revealNoFile.status === 404);
+
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);
   for (const sid of createdSeries) {

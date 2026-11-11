@@ -19,6 +19,7 @@ import * as S from './series.mjs';
 import * as A from './archive.mjs';
 import * as M from './memos.mjs';
 import * as MT from './maintenance.mjs';
+import * as U from './update.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // 版本号只有一个来源：package.json（安装包、/api/health、页面角标都读它）
@@ -501,6 +502,26 @@ async function handleApi(req, res, url) {
     if (!rels.length) return sendJson(res, 200, { ok: true, removed: 0, failed: [] });
     const result = MT.cleanArchiveOrphans(cfg.archiveRoot, rels);
     return sendJson(res, 200, { ok: true, ...result });
+  }
+  // ---- 检查更新（只走 api.github.com，不走 github.com 网页直链）----
+  if (method === 'GET' && pathname === '/api/update') {
+    const force = url.searchParams.get('force') === '1';
+    const info = await U.checkUpdate(db, { current: VERSION, force });
+    return sendJson(res, 200, info);
+  }
+  if (method === 'POST' && pathname === '/api/update/download') {
+    const body = await readBody(req);
+    const started = await U.startDownload(db, VERSION, dataDir, body.asset);
+    return sendJson(res, 200, { ok: true, download: started });
+  }
+  if (method === 'GET' && pathname === '/api/update/download') {
+    return sendJson(res, 200, { ok: true, download: U.downloadState() });
+  }
+  if (method === 'POST' && pathname === '/api/update/reveal') {
+    const st = U.downloadState();
+    if (!st.file || !fs.existsSync(st.file)) throw new ApiError(404, 'NO_UPDATE_FILE', '还没有下载好的更新包');
+    spawn('explorer.exe', ['/select,' + st.file], { shell: false, stdio: 'ignore', detached: true }).unref();
+    return sendJson(res, 200, { ok: true, file: st.file });
   }
   if (method === 'GET' && pathname === '/api/archive/month') {
     const ym = url.searchParams.get('ym') || localDate().slice(0, 7);

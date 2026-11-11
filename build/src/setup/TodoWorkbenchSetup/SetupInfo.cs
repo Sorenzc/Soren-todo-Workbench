@@ -6,7 +6,7 @@ namespace TodoWorkbenchSetup
 
 		public const string AppId = "TodoWorkbench";
 
-		public const string Version = "1.1.0";
+		public const string Version = SetupVersion.Value;
 
 		public const string Publisher = "陈春天的哥哥";
 	}

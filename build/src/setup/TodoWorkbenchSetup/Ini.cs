@@ -22,6 +22,12 @@ namespace TodoWorkbenchSetup
 		/// <summary>开发用：不弹窗，只把向导控件边界写进日志并退出。</summary>
 		public bool LayoutCheck;
 
+		/// <summary>开发用：直接打开某一页（1/2/3），方便截图核对排版。</summary>
+		public int Preview;
+
+		/// <summary>开发用：把向导窗口画成 PNG 存到这个路径，然后退出（不安装）。</summary>
+		public string ShotPath;
+
 		public static Ini Parse(string[] args)
 		{
 			Ini ini = new Ini();
@@ -58,6 +64,18 @@ namespace TodoWorkbenchSetup
 				else if (text.StartsWith("--data=", StringComparison.OrdinalIgnoreCase))
 				{
 					ini.DataDir = text.Substring(7).Trim('"');
+				}
+				else if (text.StartsWith("--preview=", StringComparison.OrdinalIgnoreCase))
+				{
+					int preview;
+					if (int.TryParse(text.Substring(10).Trim('"'), out preview))
+					{
+						ini.Preview = preview;
+					}
+				}
+				else if (text.StartsWith("--shot=", StringComparison.OrdinalIgnoreCase))
+				{
+					ini.ShotPath = text.Substring(7).Trim('"');
 				}
 			}
 			return ini;

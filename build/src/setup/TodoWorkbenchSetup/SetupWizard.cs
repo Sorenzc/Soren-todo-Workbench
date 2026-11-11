@@ -64,38 +64,47 @@ namespace TodoWorkbenchSetup
 			page1 = new Panel();
 			page1.Dock = DockStyle.Fill;
 			page1.BackColor = Color.White;
+			page1.AutoScroll = true;
 			base.Controls.Add(page1);
-			page1.Controls.Add(Head("选择安装位置", 20, 18, 620));
-			page1.Controls.Add(Paragraph("待办工作台 是装在这台电脑上的本地程序。待办、归档和备份都存在本机，不会上传到任何服务器。", 20, 54, 620));
-			page1.Controls.Add(Label2("安装给谁", 20, 100, true));
-			scopeUser = Radio("仅为我安装（推荐）", 20, 126, 620);
+
+			// 文字块一律 AutoSize + MaximumSize，按实际换行高度往下摆；
+			// 不写死高度，换字体或高 DPI 时也不会互相压住。
+			int y1 = 18;
+			page1.Controls.Add(Place(Head("选择安装位置", 20, 620), ref y1, 0));
+			page1.Controls.Add(Place(Paragraph("待办工作台是装在这台电脑上的本地程序。待办、归档和备份都存在本机，不会上传到任何服务器。", 20, 620), ref y1, 6));
+			page1.Controls.Add(Place(Label2("安装给谁", 20, true), ref y1, 14));
+
+			scopeUser = Radio("仅为我安装（推荐）", 20, 620);
 			scopeUser.Checked = true;
-			RadioButton radioButton = scopeUser;
-			EventHandler value = delegate
+			scopeUser.CheckedChanged += delegate
 			{
 				SyncScope();
 			};
-			radioButton.CheckedChanged += value;
-			page1.Controls.Add(scopeUser);
-			page1.Controls.Add(Paragraph("装进你的用户目录，不需要管理员权限，不会弹出「用户账户控制」。只有当前 Windows 账户能用。", 42, 154, 596));
-			scopeMachine = Radio("为所有用户安装", 20, 196, 620);
+			page1.Controls.Add(Place(scopeUser, ref y1, 4));
+			page1.Controls.Add(Place(Paragraph("装进你的用户目录，不需要管理员权限，也不会弹「用户账户控制」。只有当前 Windows 账户能用。", 42, 596), ref y1, 2));
+
+			scopeMachine = Radio("为所有用户安装", 20, 620);
 			scopeMachine.CheckedChanged += delegate
 			{
 				SyncScope();
 			};
-			page1.Controls.Add(scopeMachine);
-			page1.Controls.Add(Paragraph("装进 Program Files，这台电脑上每个账户都能用。需要管理员权限，安装时会弹出一次「用户账户控制」，点「是」继续。", 42, 224, 596));
-			scopeTip = Paragraph("", 20, 262, 620);
+			page1.Controls.Add(Place(scopeMachine, ref y1, 12));
+			page1.Controls.Add(Place(Paragraph("装进 Program Files，这台电脑上每个账户都能用。需要管理员权限，安装时会弹一次「用户账户控制」。", 42, 596), ref y1, 2));
+
+			scopeTip = Paragraph("", 20, 620);
 			scopeTip.ForeColor = Color.FromArgb(37, 99, 235);
-			page1.Controls.Add(scopeTip);
-			page1.Controls.Add(Label2("安装到", 20, 292, true));
+			Reserve(scopeTip, 2);
+			page1.Controls.Add(Place(scopeTip, ref y1, 8));
+
+			page1.Controls.Add(Place(Label2("安装到", 20, true), ref y1, 10));
+
 			dirBox = new TextBox();
-			dirBox.Bounds = new Rectangle(20, 318, 520, 26);
+			dirBox.Bounds = new Rectangle(20, y1 + 6, 520, 26);
 			dirBox.Text = ini.Dir ?? Paths.DefaultDir(false);
 			page1.Controls.Add(dirBox);
 			Button button = new Button();
 			button.Text = "浏览…";
-			button.Bounds = new Rectangle(548, 318, 92, 26);
+			button.Bounds = new Rectangle(548, dirBox.Top, 92, 26);
 			button.FlatStyle = FlatStyle.Flat;
 			button.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
 			button.Click += delegate
@@ -103,18 +112,25 @@ namespace TodoWorkbenchSetup
 				Browse();
 			};
 			page1.Controls.Add(button);
-			page1.Controls.Add(Paragraph("默认位置不在 C 盘也不影响使用；你可以装到任何有写权限的文件夹。", 20, 352, 620));
-			page1.Controls.Add(Paragraph("数据位置：" + Paths.DataDir + "（卸载时可选择保留）", 20, 378, 620, Color.FromArgb(107, 114, 128), 8.75f));
-			hint = Paragraph("", 20, 406, 620);
+			y1 = dirBox.Bottom;
+
+			page1.Controls.Add(Place(Paragraph("默认位置不在 C 盘也不影响使用；也可以装到任何有写权限的文件夹。", 20, 620), ref y1, 8));
+			page1.Controls.Add(Place(Paragraph("数据位置：" + Paths.DataDir + "（卸载时可选择保留）", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y1, 6));
+
+			hint = Paragraph("", 20, 620);
 			hint.ForeColor = Color.FromArgb(185, 28, 28);
-			page1.Controls.Add(hint);
+			Reserve(hint, 2);
+			page1.Controls.Add(Place(hint, ref y1, 8));
+
 			Button button2 = Button2("取消", 470, 448);
+			button2.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
 			button2.Click += delegate
 			{
 				Close();
 			};
 			page1.Controls.Add(button2);
 			Button button3 = Button2("安装", 558, 448);
+			button3.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
 			button3.BackColor = Color.FromArgb(37, 99, 235);
 			button3.ForeColor = Color.White;
 			button3.FlatAppearance.BorderSize = 0;
@@ -128,38 +144,45 @@ namespace TodoWorkbenchSetup
 			page2.BackColor = Color.White;
 			page2.Visible = false;
 			base.Controls.Add(page2);
-			page2.Controls.Add(Head("正在安装", 20, 18, 580));
-			progressHead = Paragraph("正在复制程序文件…", 20, 56, 580);
-			page2.Controls.Add(progressHead);
+			int y2 = 18;
+			page2.Controls.Add(Place(Head("正在安装", 20, 580), ref y2, 0));
+			progressHead = Paragraph("正在复制程序文件…", 20, 580);
+			page2.Controls.Add(Place(progressHead, ref y2, 8));
 			bar = new ProgressBar();
-			bar.Bounds = new Rectangle(20, 92, 620, 18);
+			bar.Bounds = new Rectangle(20, y2 + 12, 620, 18);
 			bar.Minimum = 0;
 			bar.Maximum = 100;
 			page2.Controls.Add(bar);
 			stage = new Label();
-			stage.Bounds = new Rectangle(20, 124, 620, 210);
+			stage.Bounds = new Rectangle(20, bar.Bottom + 14, 620, 190);
 			stage.Font = new Font("Microsoft YaHei UI", 9.5f);
 			stage.ForeColor = Color.FromArgb(55, 65, 81);
 			page2.Controls.Add(stage);
-			page2.Controls.Add(Paragraph("会做的：新建程序文件夹、在开始菜单放一个「待办工作台」、在「设置 → 应用」里登记以便卸载。\r\n不会做的：不改系统设置、不装驱动、不联网上传数据（程序只监听本机 127.0.0.1）。", 20, 344, 620, Color.FromArgb(107, 114, 128), 8.75f));
+			y2 = stage.Bottom;
+			page2.Controls.Add(Place(Paragraph("会做的：新建程序文件夹、在开始菜单放一个「待办工作台」、在「设置 → 应用」里登记以便卸载。\r\n不会做的：不改系统设置、不装驱动、不联网上传数据（程序只监听本机 127.0.0.1）。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y2, 12));
+
 			page3 = new Panel();
 			page3.Dock = DockStyle.Fill;
 			page3.BackColor = Color.White;
 			page3.Visible = false;
 			base.Controls.Add(page3);
-			page3.Controls.Add(Head("✓  安装完成", 20, 18, 620));
-			donePath = Paragraph("", 20, 58, 620);
-			page3.Controls.Add(donePath);
-			optLaunch = Option("立即启动待办工作台", 20, 100, true);
-			page3.Controls.Add(optLaunch);
-			optDesktop = Option("在桌面创建快捷方式", 20, 132, true);
-			page3.Controls.Add(optDesktop);
-			optOpenData = Option("打开数据目录", 20, 164, false);
-			page3.Controls.Add(optOpenData);
-			page3.Controls.Add(Paragraph("以后可以从托盘图标随时打开，卸载时可以选择保留数据。", 20, 204, 620, Color.FromArgb(107, 114, 128), 8.75f));
-			selfCheck = Paragraph("", 20, 240, 620);
-			page3.Controls.Add(selfCheck);
+			int y3 = 18;
+			page3.Controls.Add(Place(Head("✓  安装完成", 20, 620), ref y3, 0));
+			donePath = Paragraph("待办工作台 " + SetupVersion.Value + " 已装到\r\n" + (ini.Dir ?? Paths.DefaultDir(false)), 20, 620);
+			Reserve(donePath, 3);
+			page3.Controls.Add(Place(donePath, ref y3, 10));
+			optLaunch = Option("立即启动待办工作台", 20, true);
+			page3.Controls.Add(Place(optLaunch, ref y3, 12));
+			optDesktop = Option("在桌面创建快捷方式", 20, true);
+			page3.Controls.Add(Place(optDesktop, ref y3, 4));
+			optOpenData = Option("打开数据目录", 20, false);
+			page3.Controls.Add(Place(optOpenData, ref y3, 4));
+			page3.Controls.Add(Place(Paragraph("以后可以从托盘图标随时打开，卸载时可以选择保留数据。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y3, 10));
+			selfCheck = Paragraph("", 20, 620);
+			Reserve(selfCheck, 3);
+			page3.Controls.Add(Place(selfCheck, ref y3, 10));
 			Button button4 = Button2("完成", 558, 448);
+			button4.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
 			button4.BackColor = Color.FromArgb(37, 99, 235);
 			button4.ForeColor = Color.White;
 			button4.FlatAppearance.BorderSize = 0;
@@ -169,6 +192,26 @@ namespace TodoWorkbenchSetup
 			};
 			page3.Controls.Add(button4);
 			SyncScope();
+		}
+
+		/// <summary>开发用：直接翻到某一页，方便截图核对排版（--preview=1|2|3）。</summary>
+		public void ShowPreview(int page)
+		{
+			page1.Visible = (page == 1);
+			page2.Visible = (page == 2);
+			page3.Visible = (page == 3);
+			if (page == 2)
+			{
+				progressHead.Text = "正在复制程序文件…（第 2 步，共 3 步）";
+				stage.Text = "正在解压程序文件…\r\n正在创建开始菜单快捷方式…\r\n正在登记卸载信息…";
+				bar.Value = 60;
+			}
+			if (page == 3)
+			{
+				donePath.Text = "待办工作台 " + SetupVersion.Value + " 已装到\r\n" + (ini.Dir ?? Paths.DefaultDir(false));
+				selfCheck.Text = "自检通过：程序文件齐全，可以正常启动。";
+				selfCheck.ForeColor = Color.FromArgb(4, 120, 87);
+			}
 		}
 
 		public void LayoutReport()
@@ -193,57 +236,94 @@ namespace TodoWorkbenchSetup
 			}
 		}
 
-		private static Label Head(string text, int x, int y, int w)
+		/// <summary>按给定宽度量出文字实际高度。AutoSize + MaximumSize 在控件拿到句柄前
+		/// 有时算不出换行高度（会被压扁成一行），所以这里直接量。</summary>
+		private static int TextHeight(string text, Font font, int width)
+		{
+			if (string.IsNullOrEmpty(text))
+			{
+				return font.Height;
+			}
+			int total = 0;
+			foreach (string line in text.Replace("\r\n", "\n").Split('\n'))
+			{
+				string probe = line.Length == 0 ? " " : line;
+				Size size = TextRenderer.MeasureText(probe, font, new Size(width, 1 << 20),
+					TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+				total += size.Height;
+			}
+			return Math.Max(font.Height, total + 2);
+		}
+
+		/// <summary>给运行期才会填文字的位置预留高度（例如提示、自检结果）。</summary>
+		private static void Reserve(Label label, int lines)
+		{
+			label.Height = label.Font.Height * lines + 4;
+		}
+
+		/// <summary>把控件按「上一块的底边 + 间距」往下摆，返回它的底边。</summary>
+		private static T Place<T>(T control, ref int y, int gap) where T : Control
+		{
+			control.Top = y + gap;
+			y = control.Bottom;
+			return control;
+		}
+
+		private static Label Head(string text, int x, int w)
 		{
 			Label label = new Label();
 			label.Text = text;
 			label.Font = new Font("Microsoft YaHei UI", 14f, FontStyle.Bold);
 			label.ForeColor = Color.FromArgb(17, 24, 39);
-			label.Bounds = new Rectangle(x, y, w, 32);
+			label.AutoSize = false;
+			label.Bounds = new Rectangle(x, 0, w, TextHeight(text, label.Font, w));
 			return label;
 		}
 
-		private static Label Label2(string text, int x, int y, bool bold)
+		private static Label Label2(string text, int x, bool bold)
 		{
 			Label label = new Label();
 			label.Text = text;
 			label.Font = new Font("Microsoft YaHei UI", 9.75f, bold ? FontStyle.Bold : FontStyle.Regular);
 			label.ForeColor = Color.FromArgb(31, 41, 55);
-			label.Bounds = new Rectangle(x, y, 580, 22);
+			label.AutoSize = false;
+			label.Bounds = new Rectangle(x, 0, 580, TextHeight(text, label.Font, 580));
 			return label;
 		}
 
-		private static Label Paragraph(string text, int x, int y, int w)
+		private static Label Paragraph(string text, int x, int w)
 		{
-			return Paragraph(text, x, y, w, Color.FromArgb(75, 85, 99), 9f);
+			return Paragraph(text, x, w, Color.FromArgb(75, 85, 99), 9f);
 		}
 
-		private static Label Paragraph(string text, int x, int y, int w, Color color, float size)
+		private static Label Paragraph(string text, int x, int w, Color color, float size)
 		{
 			Label label = new Label();
 			label.Text = text;
 			label.Font = new Font("Microsoft YaHei UI", size);
 			label.ForeColor = color;
-			label.Bounds = new Rectangle(x, y, w, 46);
 			label.AutoSize = false;
+			label.Bounds = new Rectangle(x, 0, w, TextHeight(text, label.Font, w));
 			return label;
 		}
 
-		private static RadioButton Radio(string text, int x, int y, int w)
+		private static RadioButton Radio(string text, int x, int w)
 		{
 			RadioButton radioButton = new RadioButton();
 			radioButton.Text = text;
 			radioButton.Font = new Font("Microsoft YaHei UI", 9.75f, FontStyle.Bold);
-			radioButton.Bounds = new Rectangle(x, y, w, 26);
+			radioButton.AutoSize = false;
+			radioButton.Bounds = new Rectangle(x, 0, w, 26);
 			return radioButton;
 		}
 
-		private static CheckBox Option(string text, int x, int y, bool check)
+		private static CheckBox Option(string text, int x, bool check)
 		{
 			CheckBox checkBox = new CheckBox();
 			checkBox.Text = text;
 			checkBox.Checked = check;
-			checkBox.Bounds = new Rectangle(x, y, 580, 22);
+			checkBox.AutoSize = false;
+			checkBox.Bounds = new Rectangle(x, 0, 580, 24);
 			return checkBox;
 		}
 
@@ -459,7 +539,7 @@ namespace TodoWorkbenchSetup
 					}
 					else
 					{
-						donePath.Text = "待办工作台 1.1.0 已装到\r\n" + dir;
+						donePath.Text = "待办工作台 " + SetupVersion.Value + " 已装到\r\n" + dir;
 						page2.Visible = false;
 						page3.Visible = true;
 						page3.BringToFront();

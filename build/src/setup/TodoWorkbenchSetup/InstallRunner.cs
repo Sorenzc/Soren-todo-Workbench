@@ -253,7 +253,7 @@ namespace TodoWorkbenchSetup
 			SetupLog.W("extract start dir=" + dir);
 			Assembly executingAssembly = Assembly.GetExecutingAssembly();
 			SetupLog.W("resources=" + string.Join(",", executingAssembly.GetManifestResourceNames()));
-			string text = Path.Combine(dir, "app", "1.1.0");
+			string text = Path.Combine(dir, "app", SetupVersion.Value);
 			if (Directory.Exists(text))
 			{
 				Directory.Delete(text, true);
@@ -301,7 +301,7 @@ namespace TodoWorkbenchSetup
 			catch
 			{
 			}
-			File.WriteAllText(Path.Combine(text, ".ready"), "1.1.0", Encoding.UTF8);
+			File.WriteAllText(Path.Combine(text, ".ready"), SetupVersion.Value, Encoding.UTF8);
 			return num;
 		}
 
@@ -318,7 +318,7 @@ namespace TodoWorkbenchSetup
 			{
 				SetupLog.W("warn: create data dir " + dataDir + " -> " + ex.Message + "（留给启动器首次运行时决定）");
 			}
-			string contents = "{\r\n  \"dataDir\": \"" + dataDir.Replace("\\", "\\\\") + "\",\r\n  \"version\": \"1.1.0\",\r\n  \"scope\": \"" + (ini.Machine ? "machine" : "user") + "\"\r\n}\r\n";
+			string contents = "{\r\n  \"dataDir\": \"" + dataDir.Replace("\\", "\\\\") + "\",\r\n  \"version\": \"" + SetupVersion.Value + "\",\r\n  \"scope\": \"" + (ini.Machine ? "machine" : "user") + "\"\r\n}\r\n";
 			File.WriteAllText(Path.Combine(dir, "config.json"), contents, new UTF8Encoding(false));
 		}
 
@@ -331,7 +331,7 @@ namespace TodoWorkbenchSetup
 				using (RegistryKey registryKey2 = registryKey.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TodoWorkbench"))
 				{
 					registryKey2.SetValue("DisplayName", "待办工作台", RegistryValueKind.String);
-					registryKey2.SetValue("DisplayVersion", "1.1.0", RegistryValueKind.String);
+					registryKey2.SetValue("DisplayVersion", SetupVersion.Value, RegistryValueKind.String);
 					registryKey2.SetValue("Publisher", "陈春天的哥哥", RegistryValueKind.String);
 					registryKey2.SetValue("DisplayIcon", text + ",0", RegistryValueKind.String);
 					registryKey2.SetValue("InstallLocation", dir, RegistryValueKind.String);

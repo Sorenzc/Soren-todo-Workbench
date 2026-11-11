@@ -788,17 +788,19 @@ try {
   await sleep(300);
   check('统计视图不显示速记框', documentElement.querySelector('#captureForm')?.hidden === true);
 
-  // 小组件：待办少于 5 条时出现，多了自动收起。
+  // 小组件：常驻显示；待办多了换成紧凑模式，但不是消失。
   // 注意必须先 setView（refresh 会重新拉 bootstrap 覆盖 counts），再改 counts 并重绘。
   vm.runInContext("setView('focus')", ctx);
   await sleep(500);
   vm.runInContext("state.bootstrap.counts.open = 2; state.wg = { from:'', to:'', days:{}, doneDays:{}, loaded:true }; renderAll()", ctx);
   await sleep(200);
   check('待办少时显示聚焦小组件', Boolean(documentElement.querySelector('#list .fw')), 'expect .fw');
+  check('待办少时不是紧凑模式', !documentElement.querySelector('#list .fw.fw-compact'));
 
   vm.runInContext("state.bootstrap.counts.open = 9; renderAll()", ctx);
   await sleep(200);
-  check('待办多时收起聚焦小组件', !documentElement.querySelector('#list .fw'), 'expect no .fw');
+  check('待办多时小组件仍然显示', Boolean(documentElement.querySelector('#list .fw')), 'expect .fw kept');
+  check('待办多时进入紧凑模式', Boolean(documentElement.querySelector('#list .fw.fw-compact')), 'expect .fw-compact');
 
   // ---- v1.7：速记独立成库 ----
   const memoMark = 'UI 速记 ' + Date.now();

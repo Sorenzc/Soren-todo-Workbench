@@ -465,7 +465,7 @@ kbd {
   background: var(--bg-app); border-radius: 4px; padding: 1px 5px;
 }
 
-/* 聚焦页小组件：只在待办不多时出现，条目一多就自动收起 */
+/* 聚焦页小组件：常驻显示；待办变多时换成紧凑模式，只压高度不消失 */
 .fw { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 12px; margin: 2px 0 16px; }
 .fw-card {
   background: var(--card-bg); border-radius: var(--card-radius);
@@ -473,6 +473,36 @@ kbd {
   padding: 14px 16px; min-width: 0;
   display: flex; flex-direction: column;
 }
+
+/* 紧凑模式：约从 240px 压到 150px 左右，把高度还给列表 */
+.fw.fw-compact { gap: 10px; margin: 0 0 12px; }
+.fw.fw-compact .fw-card { padding: 9px 12px; border-radius: 12px; }
+.fw.fw-compact .fw-head { margin-bottom: 4px; font-size: 12px; }
+.fw.fw-compact .fw-card > .fw-head > span:first-child { font-size: 13px; }
+.fw.fw-compact .fw-card > .fw-head > span:last-child { font-size: 11px; }
+.fw.fw-compact .fw-time { font-size: 30px; }
+.fw.fw-compact .fw-date { margin-top: 1px; font-size: 12px; }
+.fw.fw-compact .fw-greet { margin-top: 5px; font-size: 13px; }
+.fw.fw-compact .fw-load { display: none; }
+.fw.fw-compact .fw-next { padding-top: 6px; margin-top: 6px; }
+.fw.fw-compact .fw-next-k { font-size: 11px; }
+.fw.fw-compact .fw-next-t { font-size: 12px; }
+.fw.fw-compact .fw-cal { row-gap: 1px; }
+.fw.fw-compact .fw-dow { font-size: 11px; padding-bottom: 2px; }
+.fw.fw-compact .fw-day { height: 22px; font-size: 11px; border-radius: 5px; }
+.fw.fw-compact .fw-day .d { bottom: 2px; width: 3px; height: 3px; }
+.fw.fw-compact .fw-foot { display: none; }
+/* 紧凑模式下格子太小，圆点改成底色，避免和下一行数字挤在一起 */
+.fw.fw-compact .fw-day .d { display: none; }
+.fw.fw-compact .fw-day.has { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font-weight: 600; }
+.fw.fw-compact .fw-day.has.done { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success-600); }
+.fw.fw-compact .fw-day.today,
+.fw.fw-compact .fw-day.has.today { background: var(--accent); color: #fff; }
+.fw.fw-compact .fw-week { gap: 4px; min-height: 42px; }
+.fw.fw-compact .fw-quiet { height: 42px; font-size: 11px; }
+.fw.fw-compact .fw-cap { margin-top: 6px; font-size: 11px; }
+.fw.fw-compact .fw-bar { max-width: 22px; }
+
 .fw-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
   font-size: 13px; color: var(--text-2); font-weight: 700; letter-spacing: .01em;

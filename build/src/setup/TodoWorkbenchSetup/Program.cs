@@ -31,6 +31,33 @@ namespace TodoWorkbenchSetup
 					setupWizard.LayoutReport();
 					Environment.Exit(0);
 				}
+				if (!string.IsNullOrEmpty(ini.ShotPath))
+				{
+					// 开发用：把向导某一页画成 PNG 再退出（不安装、不需要前台窗口）
+					using (SetupWizard shot = new SetupWizard(ini))
+					{
+						shot.ShowPreview(ini.Preview > 0 ? ini.Preview : 1);
+						shot.Show();
+						Application.DoEvents();
+						System.Threading.Thread.Sleep(400);
+						Application.DoEvents();
+						using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(shot.Width, shot.Height))
+						{
+							shot.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, shot.Width, shot.Height));
+							bmp.Save(ini.ShotPath, System.Drawing.Imaging.ImageFormat.Png);
+						}
+						shot.Close();
+					}
+					Environment.Exit(0);
+				}
+				if (ini.Preview > 0)
+				{
+					// 开发用：直接翻到第 N 页截屏核对排版（不会真的安装）
+					SetupWizard preview = new SetupWizard(ini);
+					preview.ShowPreview(ini.Preview);
+					Application.Run(preview);
+					Environment.Exit(0);
+				}
 				Application.Run(new SetupWizard(ini));
 			}
 			catch (Exception ex)

@@ -1,4 +1,4 @@
-// 打包：生成「便携版文件夹」+「单文件 exe」+「安装程序」+ 分享用 zip
+// 打包：只出两样东西——安装包（exe）+ 便携包（zip）。单文件版已停止发布。
 // 用法：node scripts/build-dist.mjs [--skip-setup]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -75,13 +75,29 @@ const cscBase = [
   '/r:System.Web.Extensions.dll', '/r:System.IO.Compression.dll', '/r:System.IO.Compression.FileSystem.dll',
 ];
 const launcherSrc = listCs(path.join(BUILD, 'src', 'launcher'));
-const setupSrc = listCs(path.join(BUILD, 'src', 'setup'));
+// 安装向导的版本号由打包时生成的文件提供；仓库里那份 SetupVersion.cs 只是开发默认值，编译时排除
+const setupSrc = listCs(path.join(BUILD, 'src', 'setup')).filter((p) => !p.endsWith('SetupVersion.cs'));
 
-/* 1) 启动器（两份：便携版不带 payload、单文件版带 payload） */
+/* 1) 启动器（便携版和安装包共用） */
 rm(OUT);
 fs.mkdirSync(OUT, { recursive: true });
 // dist/ 被 .gitignore 排除了，干净 clone 里没有这个目录，先建出来
 fs.mkdirSync(DIST, { recursive: true });
+// 安装向导的版本号：每次打包现场生成，避免向导里写死版本
+{
+  const setupVersionFile = path.join(OUT, 'SetupVersion.g.cs');
+  fs.writeFileSync(setupVersionFile, [
+    'namespace TodoWorkbenchSetup',
+    '{',
+    '\tinternal static class SetupVersion',
+    '\t{',
+    `\t\tpublic const string Value = "${VERSION}";`,
+    '\t}',
+    '}',
+    '',
+  ].join('\r\n'), 'utf8');
+  setupSrc.push(setupVersionFile);
+}
 // 清掉 dist 里以前跑测试 / 早期版本留下的目录，只留最终产物
 for (const stale of ['setup-test.exe', 'setup.log', 'debug.log', '.app', 'logs', '工作台数据', NAME, '_test-install', '_inst2', '_inst3', '_data2', '_data3']) {
   rm(path.join(DIST, stale));
@@ -104,14 +120,13 @@ log('   node.exe ' + mb(fs.statSync(path.join(PORTABLE, 'node.exe')).size));
 const readme = `待办工作台 · 便携版 ${VERSION}
 ==============================
 
-这一版的新东西（1.2 → 1.5）
-  · 界面照 iOS 重做：系统配色、投影分层、选中行蓝底描边，深色同步。
-  · 子待办：父任务下挂一层小项，父行显示 2/3 进度，勾父带子一起完成。
-  · 到期提醒：每条待办可单独设提醒；页面开着弹提示，关掉后托盘气泡提醒。
-  · 重复待办（原来的「每月例行」）：每月某日 / 每 N 天 / 每 N 周；每天每周只有
-    一条活行，勾掉就滚到下一期，漏掉的期直接跳过，不会堆一摞逾期副本。
-  · 日历视图：月 / 周两档，格子里的条目可以拖到别的日子改期，例行未来期画虚线。
-  · 置顶、全部待办七段时间分段、组内拖动排序、把当前筛选导出成 Markdown。
+这一版的新东西
+  · 聚焦页三张卡常驻：时钟 / 迷你月历 / 本周节奏；待办一多自动收窄，但不会消失。
+  · 速记独立成一库：回车即存，可置顶、转成待办、删除可撤销，和待办不混在一起。
+  · 多选批量：Shift 连选后一次完成 / 改到明天 / 打标签 / 移分类。
+  · 打印今日清单：一页 A4，逾期排在前面，打印出来可以直接打勾。
+  · 每天第一次启动自动备份（留最近 7 份），并静默检查更新。
+  · 另有体检与清理、归档全文搜索、重复待办、日历视图、子待办与到期提醒。
   · 双击启动器窗口会自己关，服务留在后台；托盘菜单里可以退出。
 
 怎么用
@@ -153,31 +168,8 @@ const readme = `待办工作台 · 便携版 ${VERSION}
   5. 装新版：直接跑新安装包，会装到 app\\<版本> 下，数据沿用；旧版本目录可以之后手工删。
 `;
 fs.writeFileSync(path.join(PORTABLE, '使用说明.txt'), readme, 'utf8');
-fs.copyFileSync(path.join(PORTABLE, '使用说明.txt'), path.join(DIST, '使用说明.txt'));
 
-/* 3) payload.zip（单文件版内嵌） */
-log('· 打 payload.zip');
-const payload = path.join(OUT, 'payload.zip');
-rm(payload);
-{
-  const src = path.join(OUT, 'payload');
-  rm(src);
-  copyDir(path.join(PORTABLE, 'src'), path.join(src, 'src'));
-  copyDir(path.join(PORTABLE, 'public'), path.join(src, 'public'));
-  fs.copyFileSync(path.join(PORTABLE, 'node.exe'), path.join(src, 'node.exe'));
-  ps(`Compress-Archive -Path '${src}\\*' -DestinationPath '${payload}' -CompressionLevel Optimal -Force`);
-  rm(src);
-}
-log('   ' + mb(fs.statSync(payload).size));
-
-/* 4) 单文件 exe */
-log('· 编译单文件版');
-const onefile = path.join(DIST, `${NAME}.exe`);
-rm(onefile);
-csc([...cscBase, '/resource:' + payload + ',payload.zip', `/out:${onefile}`, ...launcherSrc]);
-log('   ' + mb(fs.statSync(onefile).size));
-
-/* 5) 安装程序：bundle.zip = 程序文件 + 启动器 */
+/* 3) 安装程序：bundle.zip = 程序文件 + 启动器 */
 if (!skipSetup) {
   log('· 打 bundle.zip（安装包用）');
   const bundle = path.join(OUT, 'bundle.zip');

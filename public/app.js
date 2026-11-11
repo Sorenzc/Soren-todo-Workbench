@@ -287,9 +287,10 @@ async function loadFocus() {
   state.tasks = open.tasks;
 }
 
-/* 聚焦页小组件只在「待办不多」时出现：条目一多就让位给任务本身 */
-function widgetsWanted() {
-  return (state.bootstrap?.counts?.open ?? 0) < 5;
+/* 聚焦页小组件常驻：条目多的时候换成紧凑模式，少占一点高度，但不消失 */
+const WIDGETS_COMPACT_AT = 5;
+function widgetsCompact() {
+  return (state.bootstrap?.counts?.open ?? 0) >= WIDGETS_COMPACT_AT;
 }
 
 async function loadFocusWidgets() {
@@ -546,7 +547,7 @@ async function refresh() {
     else if (state.view === 'calendar') await loadCalendarView();
     else if (state.view === 'memo') await loadMemos();
     // 聚焦页小组件要一份「本月每天几件」的计数，只在用得上的时候取
-    if (state.view === 'focus' && widgetsWanted()) await loadFocusWidgets();
+    if (state.view === 'focus') await loadFocusWidgets();
     if (state.cal.open) await loadCalendarMonth(state.cal.ym);
     // 选中项跟着数据走：任务被完成/删掉后，多选里不该还留着幽灵 id
     if (state.picked.size) {
@@ -859,7 +860,7 @@ function fwMonth() {
     }
     const cell = el('button', {
       type: 'button',
-      class: `fw-day${other ? ' other' : ''}${date === todayStr() ? ' today' : ''}${doneCount ? ' done' : ''}`,
+      class: `fw-day${other ? ' other' : ''}${date === todayStr() ? ' today' : ''}${doneCount ? ' done' : ''}${count && !other ? ' has' : ''}`,
       title: `${mdLabel(date)} · ${count} 条待办${doneCount ? `，完成 ${doneCount}` : ''}`,
       text: String(parseDate(date).getDate()),
       onclick: () => setDay(date),
@@ -923,8 +924,8 @@ function fwWeek() {
 }
 
 function focusWidgets() {
-  if (!widgetsWanted() || !state.wg.loaded) return null;
-  return el('div', { class: 'fw' }, fwClock(), fwMonth(), fwWeek());
+  if (!state.wg.loaded) return null;
+  return el('div', { class: widgetsCompact() ? 'fw fw-compact' : 'fw' }, fwClock(), fwMonth(), fwWeek());
 }
 
 function renderFocus() {
@@ -932,7 +933,7 @@ function renderFocus() {
   list.innerHTML = '';
   const f = state.focus;
   const items = state.tasks;
-  // 条目少的时候先把时间/日历/节奏摆出来；条目一多这部分整体让位（widgetsWanted 判定）
+  // 小组件常驻在最上面（条目多时自动收成紧凑模式），下面才是任务
   const widgets = focusWidgets();
   if (widgets) list.append(widgets);
   if (!f || !items.length) {

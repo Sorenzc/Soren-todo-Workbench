@@ -102,6 +102,14 @@ fs.mkdirSync(DIST, { recursive: true });
 for (const stale of ['setup-test.exe', 'setup.log', 'debug.log', '.app', 'logs', '工作台数据', NAME, '_test-install', '_inst2', '_inst3', '_data2', '_data3']) {
   rm(path.join(DIST, stale));
 }
+// 旧版本的安装包也清掉：dist 只放「当前版本」的成品，免得发版时挑错文件
+for (const f of fs.readdirSync(DIST)) {
+  const m = /^(.*)-(\d+\.\d+\.\d+)-安装包\.exe$/i.exec(f);
+  if (m && m[2] !== VERSION) {
+    rm(path.join(DIST, f));
+    log(`  清掉旧安装包 ${f}`);
+  }
+}
 log('· 编译启动器');
 csc([...cscBase, `/out:${path.join(OUT, 'Launcher-plain.exe')}`, ...launcherSrc]);
 csc([...cscBase, `/out:${path.join(OUT, 'Launcher.exe')}`, ...launcherSrc]);

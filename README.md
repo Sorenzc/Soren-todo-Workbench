@@ -20,6 +20,10 @@
 | --- | --- |
 | ![深色](docs/screenshots/09-dark.png) | ![新建例行待办](docs/screenshots/10-new-recurring.png) |
 
+| 速记（独立便签库） | 聚焦页小组件 |
+| --- | --- |
+| ![速记](docs/screenshots/11-memo.png) | ![聚焦页](docs/screenshots/01-focus.png) |
+
 <sub>截图用的是演示数据，`npm run seed` 可以自己铺一份；其它页面在 `docs/screenshots/` 里。</sub>
 
 ## 快速开始

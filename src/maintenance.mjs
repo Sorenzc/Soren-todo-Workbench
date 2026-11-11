@@ -139,6 +139,16 @@ function pidAlive(pid) {
   }
 }
 
+/** 读 setting 表里的 JSON 值（自动备份时间等），读不到就返回 null */
+function setting(db, key) {
+  try {
+    const row = db.prepare('SELECT value FROM setting WHERE key = ?').get(key);
+    return row ? JSON.parse(row.value) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function inspect(db, cfg) {
   const dbSize = sizeOf(cfg.dbPath);
   const walSize = sizeOf(cfg.dbPath + '-wal');
@@ -203,6 +213,11 @@ export function inspect(db, cfg) {
     },
     links: { missing: missingLinks },
     backups: listBackups(cfg.backupRoot).map((b) => ({ name: b.name, size: b.size, size_mb: roundMB(b.size), at: b.at })),
+    backup: {
+      auto_day: setting(db, 'auto_backup_day'),
+      auto_at: setting(db, 'auto_backup_at'),
+      auto_file: setting(db, 'auto_backup_file'),
+    },
     pid: { file: pidFile, pid: filePid, alive },
     log: { path: logFile, size: logFile ? sizeOf(logFile) : null },
     generated_at: new Date().toISOString(),

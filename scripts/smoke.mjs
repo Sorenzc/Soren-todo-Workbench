@@ -734,6 +734,38 @@ async function main() {
   const revealNoFile = await api('POST', '/api/update/reveal', {});
   ok('没下载过时打开文件夹被拒', revealNoFile.status === 400 || revealNoFile.status === 404);
 
+  // 自动备份：服务启动时应当已经写过一份 -auto.db，并且 setting 里记了日期
+  ok('启动时有自动备份文件', fs.readdirSync(smokeCfg.backupRoot).some((f) => f.endsWith('-auto.db')));
+  const mnt = await api('GET', '/api/maintenance');
+  ok('体检接口报告上次自动备份', mnt.status === 200 && !!mnt.data?.backup?.auto_at, mnt.data?.backup?.auto_at);
+  ok('体检接口列出备份文件', Array.isArray(mnt.data?.backups) && mnt.data.backups.length >= 1);
+
+  // 批量操作：改属性 / 改期 / 完成
+  const bulkStamp = Date.now();
+  const bulkToday = new Date().toISOString().slice(0, 10);
+  const bulkA = await api('POST', '/api/tasks', { title: `冒烟：批量甲 ${bulkStamp}`, dueOn: bulkToday });
+  const bulkB = await api('POST', '/api/tasks', { title: `冒烟：批量乙 ${bulkStamp}`, dueOn: bulkToday });
+  const bulkC = await api('POST', '/api/tasks', { title: `冒烟：批量丙 ${bulkStamp}`, dueOn: bulkToday });
+  const bIds = [bulkA.data.task.id, bulkB.data.task.id, bulkC.data.task.id];
+  createdTasks.push(...bIds);
+
+  const patchRes = await api('POST', '/api/tasks/bulk-patch', { ids: bIds, patch: { tags: ['冒烟批量'], priority: 1 } });
+  ok('批量改标签与优先级', patchRes.status === 200 && patchRes.data.updated === 3, JSON.stringify(patchRes.data));
+  const patched = await api('GET', `/api/tasks/${bIds[0]}`);
+  ok('批量改属性真的落库', String(patched.data.task.tag_names || '').includes('冒烟批量') && patched.data.task.priority === 1);
+
+  const dueRes = await api('POST', '/api/tasks/bulk-reschedule', { ids: bIds.slice(0, 2), dueOn: '2030-05-06' });
+  ok('批量改期两条', dueRes.status === 200 && dueRes.data.updated === 2, JSON.stringify(dueRes.data));
+  const badPatch = await api('POST', '/api/tasks/bulk-patch', { ids: [], patch: { priority: 1 } });
+  ok('批量改属性空 ids 被拒', badPatch.status === 400);
+
+  const doneRes = await api('POST', '/api/tasks/bulk-complete', { ids: [bIds[0]] });
+  ok('批量完成一条', doneRes.status === 200 && doneRes.data.completed === 1, JSON.stringify(doneRes.data));
+  const doneOne = await api('GET', `/api/tasks/${bIds[0]}`);
+  ok('批量完成后是 done 且有归档', doneOne.data.task.status === 'done' && !!doneOne.data.task.archived_path);
+  const doneEmpty = await api('POST', '/api/tasks/bulk-complete', { ids: [] });
+  ok('批量完成空 ids 被拒', doneEmpty.status === 400);
+
   // 清理测试数据
   if (seriesId) await api('DELETE', `/api/series/${seriesId}`);
   for (const sid of createdSeries) {

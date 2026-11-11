@@ -126,6 +126,10 @@ const state = {
   memoQ: '',
   // 归档搜索词（只在内存里，不落盘）
   arcQ: '',
+  // 多选：Shift/Ctrl 点行进这里，底部操作条据此显示
+  picked: new Set(),
+  // 静默检查更新拿到的结果（顶栏小圆点用）
+  pendingUpdate: null,
 };
 
 /* ------------------------------ Toast ------------------------------ */
@@ -196,6 +200,7 @@ function paletteCommands() {
     { kind: '命令', text: '新建分类', run: () => { closePalette(); openCategoryModal(); } },
     { kind: '命令', text: '打开设置', run: () => { closePalette(); openSettings(); } },
     { kind: '命令', text: '今日简报（Markdown）', run: () => { closePalette(); downloadBriefing(); } },
+    { kind: '命令', text: '打印今日清单', run: () => { closePalette(); printToday(); } },
     { kind: '命令', text: '打开归档文件夹', run: () => { closePalette(); api.post('/api/open-directory', { target: 'archive' }).catch(showErr); } },
     { kind: '命令', text: '立即备份数据库', run: () => { closePalette(); doBackup(); } },
     { kind: '命令', text: '切换深浅色', run: () => { closePalette(); toggleTheme(); } },
@@ -543,6 +548,11 @@ async function refresh() {
     // 聚焦页小组件要一份「本月每天几件」的计数，只在用得上的时候取
     if (state.view === 'focus' && widgetsWanted()) await loadFocusWidgets();
     if (state.cal.open) await loadCalendarMonth(state.cal.ym);
+    // 选中项跟着数据走：任务被完成/删掉后，多选里不该还留着幽灵 id
+    if (state.picked.size) {
+      const alive = new Set([...(state.tasks || []), ...(state.done || [])].map((t) => t.id));
+      for (const id of [...state.picked]) if (!alive.has(id)) state.picked.delete(id);
+    }
     renderAll();
   } catch (err) {
     showErr(err);
@@ -682,9 +692,18 @@ function taskRow(t, opts = {}) {
   const tips = [t.title, t.category_name && `分类：${t.category_name}`, t.due_on && `到期：${t.due_on}`,
     t.tag_names && `标签：${t.tag_names}`, t.why, t.archived_path && `归档：${t.archived_path}`].filter(Boolean).join('\n');
   return el('article', {
-    class: `row${isDone ? ' done' : ''}${state.selectedId === t.id ? ' selected' : ''}${state.flashTaskId === t.id ? ' flash' : ''}`,
+    class: `row${isDone ? ' done' : ''}${state.selectedId === t.id ? ' selected' : ''}${state.picked.has(t.id) ? ' picked' : ''}${state.flashTaskId === t.id ? ' flash' : ''}`,
     dataset: { id: t.id }, title: tips,
-    onclick: (e) => { if (!e.target.closest('button')) selectTask(t.id); },
+    onclick: (e) => {
+      if (e.target.closest('button')) return;
+      // Shift / Ctrl / Cmd 点击 = 多选，不打开详情
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        togglePick(t.id, e.shiftKey);
+        return;
+      }
+      selectTask(t.id);
+    },
   },
     el('span', { class: `bar ${urgency}` }),
     isDone
@@ -1173,6 +1192,194 @@ async function togglePin(t) {
   }
 }
 
+/* --------------------------- 多选与批量 ----------------------------- */
+// Shift 连选：从上次点的那条到这一条之间全选；单独 Shift 点则只切换这一条
+function togglePick(id, shift) {
+  const rows = [...document.querySelectorAll('#list .row')].map((r) => r.dataset && r.dataset.id).filter(Boolean);
+  if (shift && state.pickAnchor && rows.includes(state.pickAnchor)) {
+    const a = rows.indexOf(state.pickAnchor);
+    const b = rows.indexOf(id);
+    if (b >= 0) {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (const rid of rows.slice(lo, hi + 1)) state.picked.add(rid);
+      state.pickAnchor = id;
+      syncPickedRows();
+      return;
+    }
+  }
+  if (state.picked.has(id)) state.picked.delete(id);
+  else state.picked.add(id);
+  state.pickAnchor = id;
+  syncPickedRows();
+}
+
+function syncPickedRows() {
+  const ids = state.picked;
+  for (const row of document.querySelectorAll('#list .row')) {
+    // 用 add/remove 而不是 toggle(cls, force)：极简 DOM 垫片里 toggle 的第二个参数会被忽略
+    if (row.dataset && ids.has(row.dataset.id)) row.classList.add('picked');
+    else row.classList.remove('picked');
+  }
+  renderBulkBar();
+}
+
+function clearPicked() {
+  state.picked.clear();
+  state.pickAnchor = null;
+  syncPickedRows();
+}
+
+function pickedTasks() {
+  const all = [...state.tasks, ...state.done];
+  const byId = new Map(all.map((t) => [t.id, t]));
+  return [...state.picked].map((id) => byId.get(id)).filter(Boolean);
+}
+
+// 底部操作条：只在有选中时出现，动作全部走后端批量接口
+function renderBulkBar() {
+  let bar = $('#bulkBar');
+  const n = state.picked.size;
+  if (!n) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (!bar) {
+    bar = el('div', { class: 'bulk-bar', id: 'bulkBar' });
+    (document.querySelector('main.main') || $('#list')?.parentElement || document.body).append(bar);
+  }
+  bar.innerHTML = '';
+  const items = pickedTasks();
+  const hasRolling = items.some((t) => t.series_id);
+  bar.append(
+    el('span', { class: 'bulk-n', text: `已选 ${n} 条` }),
+    el('button', {
+      class: 'btn small', text: '完成',
+      title: '标记完成并归档（例行待办只完成这一期）',
+      onclick: () => bulkDo('complete', items),
+    }),
+    el('button', { class: 'btn small', text: '改到明天', onclick: () => bulkDo('tomorrow', items) }),
+    el('button', { class: 'btn small', text: '改到本周日', onclick: () => bulkDo('sunday', items) }),
+    el('button', { class: 'btn small', text: '打标签', onclick: () => bulkDo('tag', items) }),
+    el('button', { class: 'btn small', text: '移分类', onclick: () => bulkDo('category', items) }),
+    el('span', { class: 'bulk-sp' }),
+    el('button', { class: 'btn small ghost', text: '取消选择', onclick: clearPicked })
+  );
+  if (hasRolling) bar.append(el('span', { class: 'bulk-hint', text: '例行待办只完成这一期' }));
+}
+
+async function bulkDo(kind, items) {
+  const ids = items.map((t) => t.id);
+  if (!ids.length) return;
+  try {
+    if (kind === 'complete') {
+      if (!window.confirm(`把选中的 ${ids.length} 条都标记完成？\n\n例行待办只完成这一期，系列照常排下一期。`)) return;
+      const r = await api.post('/api/tasks/bulk-complete', { ids });
+      clearPicked();
+      await refresh();
+      const bad = r.failed && r.failed.length ? `，${r.failed.length} 条没完成` : '';
+      toast(`已完成 ${r.completed}/${r.total} 条${bad}`);
+      return;
+    }
+    if (kind === 'tomorrow' || kind === 'sunday') {
+      const due = kind === 'tomorrow' ? addDays(todayStr(), 1) : thisSunday();
+      const r = await api.post('/api/tasks/bulk-reschedule', { ids, dueOn: due });
+      clearPicked();
+      await refresh();
+      const bad = r.failed && r.failed.length ? `，${r.failed.length} 条没挪成` : '';
+      toast(`已挪到 ${due}（${r.updated} 条）${bad}`);
+      return;
+    }
+    if (kind === 'tag') {
+      const raw = window.prompt('给选中的待办加标签（多个用空格分隔）：', '');
+      if (raw === null) return;
+      const tags = raw.split(/[\s,，]+/).map((s) => s.replace(/^#/, '').trim()).filter(Boolean);
+      if (!tags.length) return;
+      const r = await api.post('/api/tasks/bulk-patch', { ids, patch: { tags } });
+      clearPicked();
+      await refresh();
+      toast(`已给 ${r.updated} 条加上 #${tags.join(' #')}`);
+      return;
+    }
+    if (kind === 'category') {
+      const cats = state.bootstrap?.categories || [];
+      const names = cats.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+      const raw = window.prompt(`移到哪个分类？\n\n${names}`, '1');
+      if (raw === null) return;
+      const idx = Number(raw) - 1;
+      const cat = cats[idx];
+      if (!cat) { toast('没有这个分类'); return; }
+      const r = await api.post('/api/tasks/bulk-patch', { ids, patch: { categoryId: cat.id } });
+      clearPicked();
+      await refresh();
+      toast(`已把 ${r.updated} 条移到「${cat.name}」`);
+    }
+  } catch (err) {
+    showErr(err);
+  }
+}
+
+function thisSunday() {
+  const d = new Date();
+  const delta = (7 - ((d.getDay() + 6) % 7)) % 7;
+  return addDays(todayStr(), delta);
+}
+
+/* ---------------------------- 打印今日 ----------------------------- */
+// 生成一份只给打印用的 DOM（放在 body 下，@media print 时只显示它）
+function buildPrintSheet() {
+  const today = todayStr();
+  const due = state.tasks
+    .filter((t) => t.status !== 'done' && t.due_on && t.due_on <= today)
+    // 纸上先看最急的：按到期日（逾期在前），同一天再按优先级、时间
+    .sort((a, b) => String(a.due_on).localeCompare(String(b.due_on))
+      || a.priority - b.priority
+      || String(a.due_time || '99:99').localeCompare(String(b.due_time || '99:99')));
+  const est = due.reduce((n, t) => n + (Number(t.estimate_min) || 0), 0);
+  const d = parseDate(today);
+  const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+  const items = due.length
+    ? due.map((t) => {
+        const late = t.due_on < today ? `逾期 ${-daysLeft(t.due_on)} 天` : '今天';
+        const meta = [t.category_name || '未分类', PRIO_SHORT[t.priority] || '', late, t.due_time || '', t.estimate_min ? `${t.estimate_min} 分钟` : '']
+          .filter(Boolean).join(' · ');
+        return el('div', { class: 'ps-item' },
+          el('span', { class: 'ps-box' }),
+          el('div', { class: 'ps-main' },
+            el('div', { class: 'ps-t', text: t.title }),
+            el('div', { class: 'ps-m', text: meta })
+          )
+        );
+      })
+    : [el('div', { class: 'ps-empty', text: '今天没有到期的事。' })];
+  return el('div', { class: 'print-sheet', id: 'printSheet' },
+    el('div', { class: 'ps-head' },
+      el('div', { class: 'ps-title', text: '今日清单' }),
+      el('div', { class: 'ps-date', text: `${today} ${wd}` })
+    ),
+    ...items,
+    el('div', { class: 'ps-foot', text: `共 ${due.length} 件${est ? ` · 预计 ${minuteText(est)}` : ''} · 由待办工作台打印` })
+  );
+}
+
+function printToday() {
+  const old = $('#printSheet');
+  if (old) old.remove();
+  document.body.append(buildPrintSheet());
+  document.body.classList.add('printing');  const done = () => {
+    document.body.classList.remove('printing');
+    const s = $('#printSheet');
+    if (s) s.remove();
+    window.removeEventListener('afterprint', done);
+  };
+  window.addEventListener('afterprint', done);
+  window.print();
+  // 有的浏览器不触发 afterprint，兜底清掉
+  setTimeout(done, 4000);
+}
+
+// 给自动化测试（ui-smoke / e2e / 截图）留一个最小入口，免得测试去猜内部状态
+window.__wb = { buildPrintSheet, printToday, picked: () => [...state.picked] };
+
 function renderDone() {
   const list = $('#list');
   list.innerHTML = '';
@@ -1435,6 +1642,10 @@ function renderViewHead() {
     const overdue = state.tasks.filter((x) => daysLeft(x.due_on) < 0).length;
     t.textContent = '今天';
     sub.textContent = `逾期 ${overdue} 件 · 今天到期 ${state.tasks.length - overdue} 件`;
+    tools.append(el('button', {
+      class: 'btn small', text: '打印清单', title: '把今天要做的打成一页 A4（Ctrl+P 也行）',
+      onclick: () => printToday(),
+    }));
   } else if (state.view === 'day') {
     t.textContent = mdLabel(state.day);
     const doneMode = isDoneDay();
@@ -1676,6 +1887,8 @@ function setDay(date, mode) {
 /* ------------------------------ 详情面板 ------------------------------ */
 async function selectTask(id) {
   state.selectedId = id;
+  // 记下「最后点过的那一行」：之后 Shift 点另一行就从这里开始连选
+  state.pickAnchor = id;
   $('.body').classList.remove('no-detail');
   $('#detail').classList.add('open');
   try {
@@ -3109,7 +3322,8 @@ function openSettings() {
         el('div', { class: 'hint' }, `数据库：${state.bootstrap?.dbPathHint || 'workbench/data/workbench.db'}`),
         el('div', { class: 'hint' }, `归档目录：${state.bootstrap?.archiveRoot || ''}`),
         el('div', { class: 'hint', style: { marginTop: '6px' } },
-          '归档是普通文件夹，直接复制走就是备份。')
+          '归档是普通文件夹，直接复制走就是备份。'),
+        el('div', { class: 'hint', id: 'autoBackupHint', text: '自动备份：每天第一次启动时留一份，只保留最近 7 份。' })
       ),
       (() => {
         const updBox = el('div', { class: 'upd-box', id: 'updBox' },
@@ -3139,7 +3353,40 @@ function openSettings() {
       )
     );
     themeSel.addEventListener('change', () => applyTheme(themeSel.value));
+
+    // 启动时的静默检查已经拿到结果时，直接把结果展开；否则保持「检查更新」按钮，别一开面板就连网
+    const box = $('#updBox');
+    if (box && state.pendingUpdate) runUpdateCheck(box).catch(() => {});
+
+    // 顺手把「上次自动备份」填进数据位置那一段
+    api.get('/api/maintenance').then((m) => {
+      const hint = $('#autoBackupHint');
+      if (!hint || !m || !m.backup || !m.backup.auto_at) return;
+      const at = String(m.backup.auto_at).replace('T', ' ').slice(0, 16);
+      hint.textContent = `自动备份：每天第一次启动时留一份，只保留最近 7 份（上次：${at}）。`;
+    }).catch(() => {});
   });
+}
+
+/* 每天第一次打开时静默查一次更新；有新版本只在顶栏齿轮上点一颗小圆点 */
+async function checkUpdateSilently() {
+  try {
+    const day = localStorage.getItem('wb-update-day') || '';
+    if (day === todayStr()) return;
+    localStorage.setItem('wb-update-day', todayStr());
+    const r = await api.get('/api/update');
+    if (r && r.has_update) markUpdateBadge(r);
+  } catch {
+    /* 联不上就不提，用户手动点设置里的「检查更新」会看到原因 */
+  }
+}
+
+function markUpdateBadge(info) {
+  state.pendingUpdate = info;
+  const btn = $('#btnSettings');
+  if (!btn) return;
+  btn.classList.add('has-update');
+  btn.title = `有新版本 v${info.latest || ''}，点开设置查看`;
 }
 
 async function doBackup() {
@@ -3572,6 +3819,7 @@ function renderAll() {
   else if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'memo') renderMemo();
   renderStatusBar();
+  renderBulkBar();
   document.body.querySelector('.body').classList.toggle('no-detail', !state.selectedId);
   renderDetail();
   if (state.detail) syncDetailSnapshot();
@@ -3756,6 +4004,8 @@ function bindEvents() {
     // 到期提醒：20 秒一轮，服务端用 remind_fired 抢占，托盘和页面不会重复弹
     pollReminders();
     setInterval(pollReminders, 20000);
+    // 每天第一次打开时后台查一次更新：失败静默，只在顶栏齿轮上点一个小圆点
+    checkUpdateSilently();
     // 聚焦页的时钟每秒走一格（不在这个视图时代价只有一次判断）
     setInterval(tickFocusClock, 1000);
   } catch (err) {

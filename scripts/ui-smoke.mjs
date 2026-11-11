@@ -861,6 +861,28 @@ try {
   }
   check('归档搜不到时给空状态', !!$('.arc-none'), ($('#list')?.textContent || '').slice(0, 80));
 
+  // v1.9.1：多选批量 + 打印今日清单
+  vm.runInContext("clearPicked(); setView('all')", ctx);
+  await sleep(1200);
+  const pickIds = [...document.querySelectorAll('#list .row')].slice(0, 2).map((r) => r.dataset?.id || r.getAttribute?.('data-id')).filter(Boolean);
+  check('列表里至少有两行可以多选', pickIds.length === 2, String(pickIds.length));
+  if (pickIds.length === 2) {
+    vm.runInContext(`togglePick(${JSON.stringify(pickIds[0])}, false)`, ctx);
+    vm.runInContext(`togglePick(${JSON.stringify(pickIds[1])}, true)`, ctx);
+    await sleep(120);
+    check('多选后出现底部操作条', !!$('#bulkBar'), ($('#bulkBar')?.textContent || '').slice(0, 60));
+    check('操作条显示已选条数', /已选 2 条/.test($('#bulkBar')?.textContent || ''), $('#bulkBar')?.textContent);
+    const pickedRows = [...document.querySelectorAll('#list .row')].filter((r) => String(r.className || '').includes('picked')).length;
+    check('选中的行带 picked 标记', pickedRows === 2, String(pickedRows));
+    vm.runInContext('clearPicked()', ctx);
+    await sleep(80);
+    check('取消选择后操作条消失', !$('#bulkBar'));
+  }
+
+  const sheet = vm.runInContext('buildPrintSheet()', ctx);
+  check('打印清单能生成', !!sheet && !!sheet.querySelector('.ps-item'), sheet ? sheet.textContent.slice(0, 60) : 'null');
+  check('打印清单有页脚件数', /共 \d+ 件/.test(sheet?.querySelector('.ps-foot')?.textContent || ''), sheet?.querySelector('.ps-foot')?.textContent);
+
   // 清理：本段建的每日系列
   if (dailySeriesId14) await fetch(BASE + `/api/series/${dailySeriesId14}`, { method: 'DELETE', headers: { 'x-wb-token': token } });
   // 删系列不会带走已经写出的归档 md（/api/archive/tree 按库遍历看不到孤儿文件），这里顺手扫一遍

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { nowIso, uid } from './util.mjs';
+import { localDate, nowIso, uid } from './util.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const APP_ROOT = path.resolve(here, '..');
@@ -376,6 +376,39 @@ function pruneBackups(cfg, keep) {
     }
   } catch {
     /* 备份清理失败不影响主流程 */
+  }
+}
+
+/** 每天第一次启动时自动备份一份，只保留最近 7 份「自动」备份（手动备份仍按 14 份清理）。
+ *  失败只写日志，绝不挡住启动——自动备份是保险，不是前置条件。 */
+export function autoBackupIfNeeded(db, cfg) {
+  try {
+    const today = localDate();
+    if (getSetting(db, 'auto_backup_day', '') === today) return null;
+    const file = backup(db, cfg, 'auto');
+    pruneAutoBackups(cfg, 7);
+    setSetting(db, 'auto_backup_day', today);
+    setSetting(db, 'auto_backup_at', nowIso());
+    setSetting(db, 'auto_backup_file', path.basename(file));
+    return file;
+  } catch (err) {
+    console.error('[backup] 自动备份失败：' + (err && err.message ? err.message : err));
+    return null;
+  }
+}
+
+function pruneAutoBackups(cfg, keep) {
+  try {
+    const files = fs
+      .readdirSync(cfg.backupRoot)
+      .filter((f) => f.startsWith('todo-') && f.endsWith('-auto.db'))
+      .map((f) => ({ f, t: fs.statSync(path.join(cfg.backupRoot, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const extra of files.slice(keep)) {
+      fs.rmSync(path.join(cfg.backupRoot, extra.f), { force: true });
+    }
+  } catch {
+    /* 清理失败不影响主流程 */
   }
 }
 

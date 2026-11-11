@@ -426,6 +426,34 @@ async function main() {
     await cdp.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
     await sleep(250);
 
+    // v1.9.1：打印清单与多选（真实浏览器里才有真正的 DOM 与布局）
+    await cdp.eval(`(() => { const b = document.querySelectorAll('#navViews button')[1]; if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true })); })()`);
+    await sleep(700);
+    const hasPrintBtn = await cdp.eval(`[...document.querySelectorAll('#viewTools button')].some((b) => /打印清单/.test(b.textContent || ''))`);
+    ok('今天视图有「打印清单」按钮', hasPrintBtn === true, String(hasPrintBtn));
+    const sheetInfo = await cdp.eval(`(() => {
+      const s = window.__wb && window.__wb.buildPrintSheet();
+      if (!s) return 'no-sheet';
+      return { items: s.querySelectorAll('.ps-item').length, foot: (s.querySelector('.ps-foot')?.textContent || '') };
+    })()`);
+    ok('能生成打印清单内容', sheetInfo && sheetInfo.items >= 1 && /共 \d+ 件/.test(sheetInfo.foot), JSON.stringify(sheetInfo));
+
+    await cdp.eval(`(() => { const b = document.querySelectorAll('#navViews button')[2]; if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true })); })()`);
+    await sleep(700);
+    const picked = await cdp.eval(`(() => {
+      const rows = [...document.querySelectorAll('#list .row')];
+      if (rows.length < 2) return 'rows:' + rows.length;
+      rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+      return new Promise((r) => setTimeout(() => r({
+        picked: document.querySelectorAll('#list .row.picked').length,
+        bar: (document.querySelector('#bulkBar')?.textContent || ''),
+      }), 200));
+    })()`);
+    ok('Shift 点选出现多选操作条', picked && picked.picked === 2 && /已选 2 条/.test(picked.bar), JSON.stringify(picked));
+    await cdp.eval(`(() => { const b = [...document.querySelectorAll('#bulkBar button')].find((x) => /取消选择/.test(x.textContent || '')); if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true })); })()`);
+    await sleep(200);
+
     ok('页面全程无未捕获异常', errors.length === 0, errors.map((e) => String(e).split('\n')[0]).join(' | '));
   } finally {
     close();

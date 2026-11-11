@@ -1,6 +1,6 @@
 {
   "name": "workbench",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "private": true,
   "type": "module",
   "description": "本地待办工作台：分类、优先级、自动归档、文件夹关联、聚焦提醒",

@@ -883,3 +883,41 @@ export function snoozeTask(db, id, minutes, nowMs = Date.now()) {
   logEvent(db, id, 'updated', { snooze: mins, remind_at: next });
   return { task: getTask(db, id), remind_at: next };
 }
+
+// 批量改属性：分类、优先级、标签（只做加法）。同样单条失败不中断。
+export function bulkPatch(db, ids, patch = {}) {
+  if (!Array.isArray(ids) || ids.length === 0) throw bad('没有要修改的待办', 'BAD_IDS');
+  if (ids.length > 200) throw bad('一次最多改 200 条', 'BAD_IDS');
+  const next = {};
+  if (patch.categoryId !== undefined) next.categoryId = patch.categoryId || null;
+  if (patch.priority !== undefined) next.priority = Number(patch.priority);
+  const addTags = Array.isArray(patch.tags) ? patch.tags.filter((t) => typeof t === 'string' && t.trim()) : [];
+  if (patch.priority !== undefined && (!Number.isInteger(next.priority) || next.priority < 0 || next.priority > 3)) {
+    throw bad('优先级要在 0–3 之间', 'BAD_PRIORITY');
+  }
+  if (!Object.keys(next).length && !addTags.length) throw bad('没有要改的东西', 'BAD_PATCH');
+  const seen = new Set();
+  let updated = 0;
+  const failed = [];
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      const row = getTask(db, id);
+      if (row.status === 'done' || row.status === 'dropped') {
+        failed.push({ id, reason: row.status });
+        continue;
+      }
+      const p = { ...next };
+      if (addTags.length) {
+        const current = String(row.tag_names || '').split(' ').filter(Boolean);
+        p.tags = [...new Set([...current, ...addTags.map((t) => t.trim())])];
+      }
+      patchTask(db, id, p);
+      updated += 1;
+    } catch (err) {
+      failed.push({ id, reason: String((err && err.message) || err) });
+    }
+  }
+  return { updated, failed, total: seen.size };
+}

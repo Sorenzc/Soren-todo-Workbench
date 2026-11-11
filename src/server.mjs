@@ -9,8 +9,8 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { APP_ROOT, DEFAULTS, backup, getSettings, openDb, setSetting, tx } from './db.mjs';
-import { ApiError, camelize, localDate, nowIso } from './util.mjs';
+import { APP_ROOT, autoBackupIfNeeded, DEFAULTS, backup, getSettings, openDb, setSetting, tx } from './db.mjs';
+import { ApiError, bad, camelize, localDate, nowIso } from './util.mjs';
 import { buildFocus, decorate } from './focus.mjs';
 import { assertOpenable, explorerArgs } from './paths.mjs';
 import { captureConsole, initLog, logPath } from './log.mjs';
@@ -99,6 +99,14 @@ function refillSeriesThrottled() {
   }
 }
 refillSeriesThrottled();
+
+// 每天第一次启动自动留一份备份（保留 7 份）。失败只记日志，不影响启动。
+try {
+  const auto = autoBackupIfNeeded(db, cfg);
+  if (auto) console.log(`[backup] 自动备份：${path.basename(auto)}`);
+} catch (err) {
+  console.error('[backup] 自动备份失败：', err && err.message);
+}
 
 // 旧版本用 PowerShell 控制台回传路径，中文被解码成乱码（含 U+FFFD，已无法还原）。
 // 新版本已改为写临时文件，这里把历史脏数据标成「需重新关联」，避免界面上显示一堆问号。
@@ -404,6 +412,33 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const out = tx(db, () => T.bulkReschedule(db, body.ids, body.dueOn ?? body.due_on));
     return sendJson(res, 200, out);
+  }
+
+  // 批量改分类 / 优先级 / 加标签（多选操作条用）
+  if (method === 'POST' && pathname === '/api/tasks/bulk-patch') {
+    const body = await readBody(req);
+    const out = tx(db, () => T.bulkPatch(db, body.ids, body.patch ?? {}));
+    return sendJson(res, 200, out);
+  }
+
+  // 批量完成：逐条走 completeFlow，失败的跳过、继续下一条（单条失败不中断）
+  if (method === 'POST' && pathname === '/api/tasks/bulk-complete') {
+    const body = await readBody(req);
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x) => typeof x === 'string' && x) : [];
+    if (!ids.length) throw bad('没有要完成的待办', 'BAD_IDS');
+    if (ids.length > 200) throw bad('一次最多完成 200 条', 'BAD_IDS');
+    let done = 0;
+    const failed = [];
+    for (const id of ids) {
+      try {
+        const out = completeFlow(id, '');
+        if (out.task && out.task.status === 'done') done += 1;
+        else failed.push({ id, reason: '没变成已完成' });
+      } catch (err) {
+        failed.push({ id, reason: String((err && err.message) || err) });
+      }
+    }
+    return sendJson(res, 200, { completed: done, failed, total: ids.length });
   }
 
   // ---------- 每月例行系列 ----------

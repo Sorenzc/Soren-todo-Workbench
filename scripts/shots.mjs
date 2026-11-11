@@ -153,6 +153,31 @@ function clickDownload() {
   }, 1200);
 }
 
+// 多选截图：点第一条，再 Shift 点第二、三条
+function pickRows() {
+  setTimeout(() => {
+    const rows = [...document.querySelectorAll('#list .row[data-id]')];
+    if (rows.length < 3) throw new Error('列表里的行不够，无法演示多选');
+    rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    rows[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+  }, 700);
+}
+
+// 打印预览截图：直接构造打印 DOM 并显示出来（真打印时只显示这一块）
+function showPrintSheet() {
+  setTimeout(() => {
+    const s = window.__wb.buildPrintSheet();
+    s.style.display = 'block';
+    s.style.background = '#fff';
+    s.style.color = '#111';
+    s.style.padding = '28px 34px';
+    s.style.margin = '24px auto';
+    s.style.maxWidth = '760px';
+    s.style.boxShadow = '0 18px 44px rgba(16,24,40,.12)';
+    document.querySelector('main.main').append(s);
+  }, 900);
+}
 const SCENARIOS = {
   focus: { url: '/', desc: '聚焦（默认首页）' },
   dark: { url: '/?theme=dark', desc: '深色模式' },
@@ -184,6 +209,8 @@ const SCENARIOS = {
   archiveSearch: { url: '/?view=archive', desc: '归档全文搜索', steps: [searchArchive] },
   maintenance: { url: '/', desc: '体检与清理', steps: [openMaintenance] },
   update: { url: '/', desc: '检查更新（发现新版本）', steps: [checkUpdate, scrollModalBottom], settle: 2800 },
+  bulk: { url: '/?view=all', desc: '多选与批量操作条', steps: [pickRows], settle: 1600 },
+  printSheet: { url: '/?view=today', desc: '打印今日清单（页面预览）', steps: [showPrintSheet], settle: 1600 },
   updateDone: { url: '/', desc: '更新包下载完成（已校验）', steps: [checkUpdate, scrollModalBottom, clickDownload], settle: 14000 },
 };
 

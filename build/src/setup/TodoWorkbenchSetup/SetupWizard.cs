@@ -23,6 +23,8 @@ namespace TodoWorkbenchSetup
 
 		private readonly TextBox dirBox;
 
+		private readonly TextBox dataBox;
+
 		private readonly Label hint;
 
 		private readonly Label scopeTip;
@@ -115,7 +117,25 @@ namespace TodoWorkbenchSetup
 			y1 = dirBox.Bottom;
 
 			page1.Controls.Add(Place(Paragraph("默认位置不在 C 盘也不影响使用；也可以装到任何有写权限的文件夹。", 20, 620), ref y1, 8));
-			page1.Controls.Add(Place(Paragraph("数据位置：" + Paths.DataDir + "（卸载时可选择保留）", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y1, 6));
+
+			page1.Controls.Add(Place(Label2("数据存到", 20, true), ref y1, 10));
+			dataBox = new TextBox();
+			dataBox.Bounds = new Rectangle(20, y1 + 6, 520, 26);
+			dataBox.Text = ini.DataDir ?? Paths.DataDir;
+			page1.Controls.Add(dataBox);
+			Button dataBrowse = new Button();
+			dataBrowse.Text = "浏览…";
+			dataBrowse.Bounds = new Rectangle(548, dataBox.Top, 92, 26);
+			dataBrowse.FlatStyle = FlatStyle.Flat;
+			dataBrowse.FlatAppearance.BorderColor = Color.FromArgb(209, 213, 219);
+			dataBrowse.Click += delegate
+			{
+				BrowseInto(dataBox, "选择数据存放文件夹");
+			};
+			page1.Controls.Add(dataBrowse);
+			y1 = dataBox.Bottom;
+
+			page1.Controls.Add(Place(Paragraph("待办、速记、归档和备份都放这里；卸载时可选保留，装好后也能在「设置」里改。", 20, 620, Color.FromArgb(107, 114, 128), 8.75f), ref y1, 8));
 
 			hint = Paragraph("", 20, 620);
 			hint.ForeColor = Color.FromArgb(185, 28, 28);
@@ -350,7 +370,7 @@ namespace TodoWorkbenchSetup
 			{
 				dirBox.Text = Paths.DefaultDir(@checked);
 			}
-			scopeTip.Text = (@checked ? "这台电脑上的每个账户都能用。如果 Windows 弹出确认框，发布者显示为「陈春天的哥哥」，点「是」继续。" : "");
+			scopeTip.Text = (@checked ? "这台电脑上的每个账户都能用；Windows 弹出「用户账户控制」时点「是」继续。" : "");
 			if (!@checked && Paths.IsElevated)
 			{
 				scopeTip.Text = "当前是管理员身份运行；选「仅为我安装」只装给当前账户，不影响别人。";
@@ -359,51 +379,99 @@ namespace TodoWorkbenchSetup
 
 		private void Browse()
 		{
+			BrowseInto(dirBox, "选择安装到哪个文件夹");
+		}
+
+		private void BrowseInto(TextBox target, string description)
+		{
 			using (FolderBrowserDialog folderBrowserDialog = new FolderBrowserDialog())
 			{
-				folderBrowserDialog.Description = "选择安装到哪个文件夹";
-				folderBrowserDialog.SelectedPath = dirBox.Text;
+				folderBrowserDialog.Description = description;
+				folderBrowserDialog.SelectedPath = target.Text;
 				if (folderBrowserDialog.ShowDialog(this) == DialogResult.OK)
 				{
-					dirBox.Text = folderBrowserDialog.SelectedPath;
+					target.Text = folderBrowserDialog.SelectedPath;
 				}
 			}
 		}
 
-		private string Validate(string dir)
+		/// <summary>路径校验。label 用来区分「安装位置」和「数据目录」；
+		/// 注意盘符后面的冒号是合法的（C:\...），只有出现在别处才算非法字符。</summary>
+		private string Validate(string label, string raw, bool needWritable)
 		{
+			string dir = (raw ?? "").Trim();
 			if (dir.Length == 0)
 			{
-				return "请先选一个安装位置。";
+				return "请先填" + label + "。";
 			}
-			string text = "<>:\"|?*";
-			foreach (char value in text)
+			foreach (char c in dir)
 			{
-				if (dir.IndexOf(value) >= 0)
+				if (c < ' ')
 				{
-					return "这个路径里有 Windows 不允许的字符（< > : \" | ? *），换一个吧。";
+					return label + "里有看不见的控制字符，换一个吧。";
+				}
+				if ("<>\"|?*".IndexOf(c) >= 0)
+				{
+					return label + "里有 Windows 不允许的字符（< > \" | ? *），换一个吧。";
+				}
+			}
+			// 盘符形式：X:\... ；不接受 \\?\ 之类的设备路径和 UNC 共享
+			if (dir.StartsWith("\\\\") || dir.StartsWith("//"))
+			{
+				return label + "请用本机磁盘上的文件夹（例如 D:\\待办工作台），网络路径和设备路径这次先不支持。";
+			}
+			if (dir.Length < 2 || !char.IsLetter(dir[0]) || dir[1] != ':')
+			{
+				return label + "要写完整路径，以盘符开头（例如 D:\\待办工作台），换一个吧。";
+			}
+			if (dir.Length == 2 || (dir.Length == 3 && (dir[2] == '\\' || dir[2] == '/')))
+			{
+				return "别直接放在盘符根目录，换一个文件夹。";
+			}
+			if (dir[2] != '\\' && dir[2] != '/')
+			{
+				return label + "里的冒号只能用来分隔盘符（例如 D:\\待办工作台），换一个吧。";
+			}
+			string rawRest = dir.Substring(3);
+			if (rawRest.IndexOf(':') >= 0)
+			{
+				return label + "里的冒号只能用来分隔盘符（例如 D:\\待办工作台），换一个吧。";
+			}
+			foreach (string segment in rawRest.Split(new char[2] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
+			{
+				if (segment.EndsWith(".") || segment.EndsWith(" "))
+				{
+					return label + "里的文件夹名不能以空格或点结尾，换一个吧。";
+				}
+				if (IsReservedName(segment))
+				{
+					return label + "里不能用 " + segment + " 这种 Windows 保留名，换一个吧。";
 				}
 			}
 			string fullPath;
 			try
 			{
-				fullPath = Path.GetFullPath(dir);
+				fullPath = Path.GetFullPath(dir).TrimEnd('\\', '/');
 			}
 			catch
 			{
-				return "这个路径不对，换一个吧。";
+				return label + "看起来不是一个合法的路径，换一个吧。";
 			}
 			if (fullPath.Length > 180)
 			{
-				return "路径太长了（" + fullPath.Length + " 个字符），Windows 可能装不全。建议用默认位置。";
+				return label + "太长了（" + fullPath.Length + " 个字符），Windows 可能装不全。建议用默认位置。";
 			}
 			if (fullPath.Length <= 3)
 			{
-				return "别直接装到盘符根目录，换一个文件夹。";
+				return "别直接放在盘符根目录，换一个文件夹。";
 			}
 			if (File.Exists(fullPath))
 			{
-				return "这个位置已经有一个叫 " + Path.GetFileName(fullPath) + " 的文件，不是文件夹。";
+				return label + "上已经有一个叫 " + Path.GetFileName(fullPath) + " 的文件，不是文件夹。";
+			}
+			if (!needWritable)
+			{
+				return null;
 			}
 			try
 			{
@@ -429,42 +497,63 @@ namespace TodoWorkbenchSetup
 			}
 			catch (UnauthorizedAccessException)
 			{
-				return "这个文件夹需要管理员权限。选「为所有用户安装」，或者换个位置。";
+				return label + "需要管理员权限才能写。选「为所有用户安装」，或者换个位置。";
 			}
 			catch (Exception ex2)
 			{
-				return "没法往这个位置写文件：" + ex2.Message;
+				return "没法往" + label + "写文件：" + ex2.Message;
 			}
 			return null;
+		}
+
+		/// <summary>CON / PRN / NUL 这类保留名不能当文件夹名。</summary>
+		private static bool IsReservedName(string segment)
+		{
+			string name = segment.Split('.')[0].Trim().ToUpperInvariant();
+			return name == "CON" || name == "PRN" || name == "AUX" || name == "NUL"
+				|| name == "COM1" || name == "COM2" || name == "COM3" || name == "COM4"
+				|| name == "LPT1" || name == "LPT2" || name == "LPT3";
 		}
 
 		private void StartInstall()
 		{
 			string dir = dirBox.Text.Trim().TrimEnd('\\');
-			string text = Validate(dir);
+			string text = Validate("安装位置", dir, true);
 			if (text != null)
 			{
 				hint.Text = text;
 				return;
 			}
+			string dataDir = dataBox.Text.Trim().TrimEnd('\\');
+			string text2 = Validate("数据目录", dataDir, false);
+			if (text2 != null)
+			{
+				hint.Text = text2;
+				return;
+			}
 			hint.Text = "";
+			if (dataDir.TrimEnd('\\').ToLowerInvariant() == dir.TrimEnd('\\').ToLowerInvariant())
+			{
+				hint.Text = "数据目录不要和安装位置用同一个文件夹，换一个吧。";
+				return;
+			}
 			if (scopeMachine.Checked && !Paths.IsElevated)
 			{
-				RelaunchElevated(dir);
+				RelaunchElevated(dir, dataDir);
 			}
 			else
 			{
-				RunInstall(scopeMachine.Checked, dir, false);
+				RunInstall(scopeMachine.Checked, dir, dataDir, false);
 			}
 		}
 
-		private void RelaunchElevated(string dir)
+		private void RelaunchElevated(string dir, string dataDir)
 		{
 			hint.Text = "正在请求管理员权限…";
 			try
 			{
 				ProcessStartInfo processStartInfo = new ProcessStartInfo(Application.ExecutablePath);
-				processStartInfo.Arguments = "--elevated --machine --dir=\"" + dir + "\"" + (optDesktop.Checked ? "" : " --no-desktop") + (optLaunch.Checked ? " --launch" : "");
+				processStartInfo.Arguments = "--elevated --machine --dir=\"" + dir + "\" --data=\"" + dataDir + "\"" + (optDesktop.Checked ? "" : " --no-desktop") + (optLaunch.Checked ? " --launch" : "");
 				processStartInfo.Verb = "runas";
 				processStartInfo.UseShellExecute = true;
 				Process process = Process.Start(processStartInfo);
@@ -492,7 +581,7 @@ namespace TodoWorkbenchSetup
 			}
 		}
 
-		private void RunInstall(bool machine, string dir, bool fromElevated)
+		private void RunInstall(bool machine, string dir, string dataDir, bool fromElevated)
 		{
 			page1.Visible = false;
 			page2.Visible = true;
@@ -500,6 +589,7 @@ namespace TodoWorkbenchSetup
 			InstallRunner runner = new InstallRunner(new Ini
 			{
 				Dir = dir,
+				DataDir = dataDir,
 				Machine = machine,
 				Desktop = optDesktop.Checked
 			}, false);
